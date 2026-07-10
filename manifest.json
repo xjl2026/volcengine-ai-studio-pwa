@@ -1,0 +1,11 @@
+{
+  "name": "火山AI创作工作室",
+  "short_name": "火山AI",
+  "description": "使用火山方舟 Seedream/Seedance 模型生成图片和视频",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f0f14",
+  "theme_color": "#0f0f14",
+  "icons": []
+}
