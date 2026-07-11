@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 let imgMode = 't2i';
-let vidMode = 't2v';
+let vidMode = 't2v'; // t2v / i2v
 let imgRefImages = [];
 let vidFirstImage = [];
 let vidTailImage = [];
@@ -293,20 +293,12 @@ function updateVideoModelUI() {
   document.getElementById('vidServiceTierGroup').style.display = caps.serviceTier ? 'block' : 'none';
   updateCameraFixedVisibility(caps);
 
-  // 参考图标签页
-  const refTab = document.getElementById('vidRefTab');
-  if (caps.referenceImage) {
-    refTab.style.display = 'inline-block';
-    refTab.classList.remove('disabled');
+  // 图生视频模式下，参考图区域按模型能力显示
+  const refGroup = document.getElementById('vidRefImageGroup');
+  if (vidMode === 'i2v' && caps.referenceImage) {
+    refGroup.style.display = 'block';
   } else {
-    refTab.style.display = 'none';
-    refTab.classList.add('disabled');
-    if (vidMode === 'i2v-reference') {
-      document.querySelectorAll('.mode-tab[data-vid-mode]').forEach(t => t.classList.remove('active'));
-      document.querySelector('.mode-tab[data-vid-mode="t2v"]').classList.add('active');
-      vidMode = 't2v';
-      updateVideoModeUI();
-    }
+    refGroup.style.display = 'none';
   }
 }
 
@@ -319,16 +311,18 @@ function updateVideoModeUI() {
   const tf = document.getElementById('vidTailFrameGroup');
   const rf = document.getElementById('vidRefImageGroup');
   ff.style.display = 'none'; tf.style.display = 'none'; rf.style.display = 'none';
-  switch (vidMode) {
-    case 't2v': break;
-    case 'i2v-first': ff.style.display = 'block'; break;
-    case 'i2v-firsttail': ff.style.display = 'block'; tf.style.display = 'block'; break;
-    case 'i2v-reference': rf.style.display = 'block'; break;
+
+  if (vidMode === 'i2v') {
+    ff.style.display = 'block';
+    tf.style.display = 'block';
+    const model = document.getElementById('vidModel').value;
+    const mi = VIDEO_MODELS.find(m => m.id === model);
+    if (mi && mi.caps.referenceImage) rf.style.display = 'block';
+  } else {
+    if (vidFirstUploadCtrl) vidFirstUploadCtrl.clear();
+    if (vidTailUploadCtrl) vidTailUploadCtrl.clear();
+    if (vidRefUploadCtrl) vidRefUploadCtrl.clear();
   }
-  if (vidMode === 't2v') { vidFirstUploadCtrl.clear(); vidTailUploadCtrl.clear(); vidRefUploadCtrl.clear(); }
-  else if (vidMode === 'i2v-first') { vidTailUploadCtrl.clear(); vidRefUploadCtrl.clear(); }
-  else if (vidMode === 'i2v-firsttail') { vidRefUploadCtrl.clear(); }
-  else if (vidMode === 'i2v-reference') { vidFirstUploadCtrl.clear(); vidTailUploadCtrl.clear(); }
   const model = document.getElementById('vidModel').value;
   const mi = VIDEO_MODELS.find(m => m.id === model);
   if (mi) updateCameraFixedVisibility(mi.caps);
@@ -339,23 +333,18 @@ async function handleVideoGenerate() {
   if (!config.apiKey) { showToast('请先配置 API Key', 'warning'); switchPage('settings'); return; }
   const prompt = document.getElementById('vidPrompt').value.trim();
   if (!prompt) { showToast('请输入提示词', 'warning'); return; }
-  if ((vidMode === 'i2v-first' || vidMode === 'i2v-firsttail') && vidFirstImage.length === 0) { showToast('请上传首帧图', 'warning'); return; }
-  if (vidMode === 'i2v-firsttail' && vidTailImage.length === 0) { showToast('请上传尾帧图', 'warning'); return; }
-  if (vidMode === 'i2v-reference' && vidRefImages.length === 0) { showToast('请上传至少1张参考图', 'warning'); return; }
+  if (vidMode === 'i2v' && vidFirstImage.length === 0 && vidTailImage.length === 0 && vidRefImages.length === 0) { showToast('请至少上传一张图片', 'warning'); return; }
 
   const model = document.getElementById('vidModel').value;
   const mi = VIDEO_MODELS.find(m => m.id === model);
   if (!mi) return;
   const caps = mi.caps;
 
-  let images = [];
-  if (vidMode === 'i2v-first') images = vidFirstImage;
-  else if (vidMode === 'i2v-firsttail') images = [...vidFirstImage, ...vidTailImage];
-  else if (vidMode === 'i2v-reference') images = vidRefImages;
-
   const params = {
     mode: vidMode, model, prompt,
-    images: images.length > 0 ? images : undefined,
+    firstFrameImages: vidMode === 'i2v' && vidFirstImage.length > 0 ? vidFirstImage : undefined,
+    tailFrameImages: vidMode === 'i2v' && vidTailImage.length > 0 ? vidTailImage : undefined,
+    refImages: vidMode === 'i2v' && vidRefImages.length > 0 ? vidRefImages : undefined,
     resolution: document.getElementById('vidResolution').value,
     ratio: document.getElementById('vidRatio').value,
     duration: document.getElementById('vidDuration').value,
@@ -411,7 +400,7 @@ async function handleVideoGenerate() {
   } finally { btn.disabled = false; btn.textContent = '生成视频'; }
 }
 
-function getVidModeLabel(m) { return { 't2v': '文生视频', 'i2v-first': '图生视频(首帧)', 'i2v-firsttail': '图生视频(首尾帧)', 'i2v-reference': '参考图生视频' }[m] || m; }
+function getVidModeLabel(m) { return { 't2v': '文生视频', 'i2v': '图生视频' }[m] || m; }
 
 function renderVideoTaskStatus(status, text, percent, attempt) {
   const panel = document.getElementById('vidResultPanel');

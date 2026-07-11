@@ -112,9 +112,7 @@
         <div class="page-header"><h1>视频生成</h1></div>
         <div class="mode-tabs">
           <button class="mode-tab active" data-vid-mode="t2v">文生视频</button>
-          <button class="mode-tab" data-vid-mode="i2v-first">首帧</button>
-          <button class="mode-tab" data-vid-mode="i2v-firsttail">首尾帧</button>
-          <button class="mode-tab" data-vid-mode="i2v-reference" id="vidRefTab">参考图</button>
+          <button class="mode-tab" data-vid-mode="i2v">图生视频</button>
         </div>
 
         <div class="form-group">
@@ -123,7 +121,7 @@
         </div>
 
         <div class="form-group" id="vidFirstFrameGroup" style="display:none;">
-          <label>首帧图片</label>
+          <label>首帧图片 <span class="hint">可选</span></label>
           <div class="upload-area" id="vidFirstUpload">
             <span>点击选择首帧图片</span>
             <input type="file" id="vidFirstInput" accept="image/*" style="display:none;">
@@ -132,7 +130,7 @@
         </div>
 
         <div class="form-group" id="vidTailFrameGroup" style="display:none;">
-          <label>尾帧图片</label>
+          <label>尾帧图片 <span class="hint">可选</span></label>
           <div class="upload-area" id="vidTailUpload">
             <span>点击选择尾帧图片</span>
             <input type="file" id="vidTailInput" accept="image/*" style="display:none;">
@@ -141,7 +139,7 @@
         </div>
 
         <div class="form-group" id="vidRefImageGroup" style="display:none;">
-          <label>参考图片 <span class="hint">图片仅作为角色/场景参考，不作为首帧</span></label>
+          <label>参考图片 <span class="hint">仅作角色/风格参考，可与首帧同时使用，可选</span></label>
           <div class="upload-area" id="vidRefUpload">
             <span>点击选择参考图片（最多9张）</span>
             <input type="file" id="vidRefInput" accept="image/*" multiple style="display:none;">

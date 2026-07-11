@@ -109,16 +109,22 @@ async function generateImage(params) {
 
 // ============ 视频生成 ============
 function buildVideoRequestBody(params) {
-  const { mode, model, prompt, images, resolution, ratio, duration, seed, generateAudio, watermark, returnLastFrame, cameraFixed, frames, draft, serviceTier, caps } = params;
+  const { mode, model, prompt, firstFrameImages, tailFrameImages, refImages, resolution, ratio, duration, seed, generateAudio, watermark, returnLastFrame, cameraFixed, frames, draft, serviceTier, caps } = params;
   const body = { model, content: [] };
 
   if (prompt) body.content.push({ type: 'text', text: prompt });
-  if (images && images.length > 0) {
-    if (mode === 'i2v-reference') {
-      images.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' }));
-    } else {
-      images.forEach(url => body.content.push({ type: 'image_url', image_url: { url } }));
-    }
+
+  // 首帧图（不填 role，默认 first_frame）
+  if (firstFrameImages && firstFrameImages.length > 0) {
+    firstFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url } }));
+  }
+  // 尾帧图（role: last_frame）
+  if (tailFrameImages && tailFrameImages.length > 0) {
+    tailFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'last_frame' }));
+  }
+  // 参考图（role: reference_image，仅 2.0 系列支持）
+  if (refImages && refImages.length > 0) {
+    refImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' }));
   }
   if (resolution) body.resolution = resolution;
   if (ratio) body.ratio = ratio;
