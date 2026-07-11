@@ -13,31 +13,21 @@
 </head>
 <body>
   <div id="app">
-    <!-- 底部导航栏（手机端用底部 Tab） -->
     <nav class="bottom-nav">
       <div class="nav-item active" data-page="image">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/>
-        </svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
         <span>图片</span>
       </div>
       <div class="nav-item" data-page="video">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>
-        </svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
         <span>视频</span>
       </div>
       <div class="nav-item" data-page="history">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 106 5.3L3 8"/><path d="M12 7v5l4 2"/>
-        </svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 106 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>
         <span>历史</span>
       </div>
       <div class="nav-item" data-page="settings">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
-        </svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
         <span>设置</span>
       </div>
     </nav>
@@ -54,8 +44,13 @@
         </div>
 
         <div class="form-group">
-          <label>提示词</label>
+          <label>提示词 <button class="btn-text" id="btnClearImgPrompt">清空</button></label>
           <textarea id="imgPrompt" rows="3" placeholder="描述你想要的图片"></textarea>
+          <div class="prompt-suggestions" id="imgPromptSuggestions">
+            <button class="tag-suggestion">一只橘色的猫咪坐在窗台上，阳光洒在身上，窗外是樱花飘落的春天，宫崎骏风格</button>
+            <button class="tag-suggestion">赛博朋克城市夜景，霓虹灯倒映在雨后的街道上，高楼大厦，未来感</button>
+            <button class="tag-suggestion">水彩风格的一只白色小兔子在花园里，周围是向日葵和蝴蝶</button>
+          </div>
         </div>
 
         <div class="form-group" id="imgRefGroup" style="display:none;">
@@ -67,44 +62,16 @@
           <div class="preview-list" id="imgPreviewList"></div>
         </div>
 
-        <div class="form-group">
-          <label>模型</label>
-          <select id="imgModel"></select>
-        </div>
-
-        <div class="form-group">
-          <label>尺寸</label>
-          <select id="imgSize"></select>
-        </div>
-
-        <div class="form-group" id="imgFormatGroup">
-          <label>输出格式</label>
-          <select id="imgFormat"><option value="png">PNG</option><option value="jpeg">JPEG</option></select>
-        </div>
-
-        <div class="form-group" id="imgOptimizeGroup">
-          <label>提示词优化</label>
-          <select id="imgOptimizeMode"><option value="standard">标准模式</option><option value="fast">快速模式</option></select>
-        </div>
-
-        <div class="form-group" id="maxImagesGroup" style="display:none;">
-          <label>组图数量 (1-15)</label>
-          <input type="number" id="imgMaxImages" min="1" max="15" value="4">
-        </div>
-
-        <div class="form-group" id="imgWebSearchGroup" style="display:none;">
-          <label><input type="checkbox" id="imgWebSearch"> 联网搜索</label>
-        </div>
-
-        <div class="form-group">
-          <label><input type="checkbox" id="imgWatermark"> 添加水印</label>
-        </div>
+        <div class="form-group"><label>模型</label><select id="imgModel"></select></div>
+        <div class="form-group"><label>尺寸</label><select id="imgSize"></select></div>
+        <div class="form-group" id="imgFormatGroup"><label>输出格式</label><select id="imgFormat"><option value="png">PNG</option><option value="jpeg">JPEG</option></select></div>
+        <div class="form-group" id="imgOptimizeGroup"><label>提示词优化</label><select id="imgOptimizeMode"><option value="standard">标准模式</option><option value="fast">快速模式</option></select></div>
+        <div class="form-group" id="maxImagesGroup" style="display:none;"><label>组图数量 (1-15)</label><input type="number" id="imgMaxImages" min="1" max="15" value="4"></div>
+        <div class="form-group" id="imgWebSearchGroup" style="display:none;"><label><input type="checkbox" id="imgWebSearch"> 联网搜索</label></div>
+        <div class="form-group"><label><input type="checkbox" id="imgWatermark"> 添加水印</label></div>
 
         <button class="btn-primary btn-generate" id="btnGenImage">生成图片</button>
-
-        <div class="result-panel" id="imgResultPanel">
-          <div class="result-placeholder"><p>生成的图片将在这里展示</p></div>
-        </div>
+        <div class="result-panel" id="imgResultPanel"><div class="result-placeholder"><p>生成的图片将在这里展示</p></div></div>
       </section>
 
       <!-- 视频生成页 -->
@@ -116,102 +83,46 @@
         </div>
 
         <div class="form-group">
-          <label>提示词</label>
+          <label>提示词 <button class="btn-text" id="btnClearVidPrompt">清空</button></label>
           <textarea id="vidPrompt" rows="3" placeholder="描述视频内容"></textarea>
+          <div class="prompt-suggestions">
+            <button class="tag-suggestion">一只狐狸在雪地里奔跑，镜头跟随，背景是雪山，可以听到风声</button>
+            <button class="tag-suggestion">城市夜景延时摄影，车流如织，霓虹灯闪烁，从黄昏到入夜</button>
+            <button class="tag-suggestion">小女孩在樱花树下转圈，花瓣飘落，阳光透过树叶洒下斑驳光影</button>
+          </div>
         </div>
 
         <div class="form-group" id="vidFirstFrameGroup" style="display:none;">
           <label>首帧图片 <span class="hint">可选</span></label>
-          <div class="upload-area" id="vidFirstUpload">
-            <span>点击选择首帧图片</span>
-            <input type="file" id="vidFirstInput" accept="image/*" style="display:none;">
-          </div>
+          <div class="upload-area" id="vidFirstUpload"><span>点击选择首帧图片</span><input type="file" id="vidFirstInput" accept="image/*" style="display:none;"></div>
           <div class="preview-list" id="vidFirstPreview"></div>
         </div>
-
         <div class="form-group" id="vidTailFrameGroup" style="display:none;">
           <label>尾帧图片 <span class="hint">可选</span></label>
-          <div class="upload-area" id="vidTailUpload">
-            <span>点击选择尾帧图片</span>
-            <input type="file" id="vidTailInput" accept="image/*" style="display:none;">
-          </div>
+          <div class="upload-area" id="vidTailUpload"><span>点击选择尾帧图片</span><input type="file" id="vidTailInput" accept="image/*" style="display:none;"></div>
           <div class="preview-list" id="vidTailPreview"></div>
         </div>
-
         <div class="form-group" id="vidRefImageGroup" style="display:none;">
           <label>参考图片 <span class="hint">仅作角色/风格参考，可与首帧同时使用，可选</span></label>
-          <div class="upload-area" id="vidRefUpload">
-            <span>点击选择参考图片（最多9张）</span>
-            <input type="file" id="vidRefInput" accept="image/*" multiple style="display:none;">
-          </div>
+          <div class="upload-area" id="vidRefUpload"><span>点击选择参考图片（最多9张）</span><input type="file" id="vidRefInput" accept="image/*" multiple style="display:none;"></div>
           <div class="preview-list" id="vidRefPreview"></div>
         </div>
 
-        <div class="form-group">
-          <label>模型</label>
-          <select id="vidModel"></select>
-        </div>
-
-        <div class="form-group">
-          <label>分辨率</label>
-          <select id="vidResolution"></select>
-        </div>
-
-        <div class="form-group">
-          <label>宽高比</label>
-          <select id="vidRatio">
-            <option value="16:9">16:9</option><option value="9:16">9:16</option>
-            <option value="1:1">1:1</option><option value="4:3">4:3</option>
-            <option value="3:4">3:4</option><option value="21:9">21:9</option>
-            <option value="adaptive">智能适配</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>时长（秒） <span class="hint">-1 为自动</span></label>
-          <input type="number" id="vidDuration" value="5" min="2" max="15" step="1">
-        </div>
-
-        <div class="form-group" id="vidSeedGroup">
-          <label>随机种子 <span class="hint">-1 为随机</span></label>
-          <input type="number" id="vidSeed" value="-1">
-        </div>
-
-        <div class="form-group" id="vidFramesGroup" style="display:none;">
-          <label>帧数 <span class="hint">留空按时长算，范围29-289</span></label>
-          <input type="number" id="vidFrames" placeholder="留空按时长" min="29" max="289">
-        </div>
-
-        <div class="form-group" id="vidAudioGroup">
-          <label><input type="checkbox" id="vidGenerateAudio" checked> 生成音频</label>
-        </div>
-
-        <div class="form-group">
-          <label><input type="checkbox" id="vidWatermark"> 添加水印</label>
-        </div>
-
-        <div class="form-group" id="vidReturnLastFrameGroup">
-          <label><input type="checkbox" id="vidReturnLastFrame"> 返回尾帧图</label>
-        </div>
-
-        <div class="form-group" id="vidCameraFixedGroup" style="display:none;">
-          <label><input type="checkbox" id="vidCameraFixed"> 固定摄像头</label>
-        </div>
-
-        <div class="form-group" id="vidDraftGroup" style="display:none;">
-          <label><input type="checkbox" id="vidDraft"> 样片模式</label>
-        </div>
-
-        <div class="form-group" id="vidServiceTierGroup" style="display:none;">
-          <label>服务等级</label>
-          <select id="vidServiceTier"><option value="default">在线推理</option><option value="flex">离线推理(省钱)</option></select>
-        </div>
+        <div class="form-group"><label>模型</label><select id="vidModel"></select></div>
+        <div class="form-group"><label>分辨率</label><select id="vidResolution"></select></div>
+        <div class="form-group"><label>宽高比</label><select id="vidRatio"><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option><option value="21:9">21:9</option><option value="adaptive">智能适配</option></select></div>
+        <div class="form-group"><label>时长（秒） <span class="hint">-1 为自动</span></label><input type="number" id="vidDuration" value="5" min="2" max="15" step="1"></div>
+        <div class="form-group" id="vidSeedGroup"><label>随机种子 <span class="hint">-1 为随机</span></label><input type="number" id="vidSeed" value="-1"></div>
+        <div class="form-group" id="vidFramesGroup" style="display:none;"><label>帧数 <span class="hint">留空按时长算，范围29-289</span></label><input type="number" id="vidFrames" placeholder="留空按时长" min="29" max="289"></div>
+        <div class="form-group" id="vidAudioGroup"><label><input type="checkbox" id="vidGenerateAudio" checked> 生成音频</label></div>
+        <div class="form-group"><label><input type="checkbox" id="vidWatermark"> 添加水印</label></div>
+        <div class="form-group" id="vidReturnLastFrameGroup"><label><input type="checkbox" id="vidReturnLastFrame"> 返回尾帧图</label></div>
+        <div class="form-group" id="vidCameraFixedGroup" style="display:none;"><label><input type="checkbox" id="vidCameraFixed"> 固定摄像头</label></div>
+        <div class="form-group" id="vidDraftGroup" style="display:none;"><label><input type="checkbox" id="vidDraft"> 样片模式</label></div>
+        <div class="form-group" id="vidServiceTierGroup" style="display:none;"><label>服务等级</label><select id="vidServiceTier"><option value="default">在线推理</option><option value="flex">离线推理(省钱)</option></select></div>
 
         <button class="btn-primary btn-generate" id="btnGenVideo">生成视频</button>
-
-        <div class="result-panel" id="vidResultPanel">
-          <div class="result-placeholder"><p>生成的视频将在这里展示</p></div>
-        </div>
+        <div class="result-panel" id="vidResultPanel"><div class="result-placeholder"><p>生成的视频将在这里展示</p></div></div>
       </section>
 
       <!-- 历史记录页 -->
@@ -224,6 +135,14 @@
       <section id="page-settings" class="page">
         <div class="page-header"><h1>设置</h1></div>
         <div class="form-group">
+          <label>API Key 管理</label>
+          <select id="apiKeySelect"></select>
+        </div>
+        <div class="form-group">
+          <label>备注名 <span class="hint">方便区分多个 Key</span></label>
+          <input type="text" id="apiKeyLabel" placeholder="如：个人账号">
+        </div>
+        <div class="form-group">
           <label>API Key</label>
           <input type="password" id="settingsApiKey" placeholder="sk-xxxx">
         </div>
@@ -232,15 +151,20 @@
           <input type="text" id="settingsApiDomain" value="https://ark.cn-beijing.volces.com">
         </div>
         <div class="settings-actions">
+          <button class="btn-secondary" id="btnDeleteApiKey">删除当前</button>
           <button class="btn-secondary" id="btnTestConnection">测试连接</button>
           <button class="btn-primary" id="btnSaveSettings">保存</button>
+        </div>
+        <div class="form-group" style="margin-top:16px;">
+          <label><input type="checkbox" id="notifyOnComplete" checked> 任务完成时推送通知</label>
         </div>
         <div class="config-info" id="configInfo"></div>
         <div class="help-section">
           <h3>使用帮助</h3>
           <div class="help-item"><strong>1. 获取 API Key</strong><p>火山引擎控制台 → 火山方舟 → API Key 管理</p></div>
           <div class="help-item"><strong>2. 开通模型</strong><p>在方舟控制台开通 Seedream(图片) 和 Seedance(视频)</p></div>
-          <div class="help-item"><strong>3. 数据安全</strong><p>API Key 仅保存在手机本地，不会上传</p></div>
+          <div class="help-item"><strong>3. 多 Key 管理</strong><p>可保存多个 API Key，通过下拉框切换</p></div>
+          <div class="help-item"><strong>4. 数据安全</strong><p>所有数据仅保存在本地，不会上传</p></div>
         </div>
       </section>
     </main>
@@ -250,6 +174,7 @@
   <div class="loading-overlay" id="loadingOverlay" style="display:none;">
     <div class="loading-content"><div class="spinner"></div><p id="loadingText">处理中...</p></div>
   </div>
+  <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;background:#ff4d6d;color:#fff;text-align:center;padding:6px;font-size:13px;z-index:9999;">网络已断开</div>
 
   <script src="api.js"></script>
   <script src="app.js"></script>

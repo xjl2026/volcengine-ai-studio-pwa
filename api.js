@@ -49,10 +49,17 @@ const Store = {
     await this.saveHistory(filtered);
     return filtered;
   },
-  async clearHistory() { localStorage.setItem('volc_history', '[]'); return []; }
+  async clearHistory() { localStorage.setItem('volc_history', '[]'); return []; },
+  // 多 API Key 管理
+  getApiKeys() { try { return JSON.parse(localStorage.getItem('volc_api_keys')) || []; } catch { return []; } },
+  saveApiKeys(keys) { localStorage.setItem('volc_api_keys', JSON.stringify(keys)); },
+  getActiveKeyId() { return localStorage.getItem('volc_active_key_id') || ''; },
+  setActiveKeyId(id) { localStorage.setItem('volc_active_key_id', id); },
+  getNotifySetting() { return localStorage.getItem('volc_notify') !== 'false'; },
+  setNotifySetting(val) { localStorage.setItem('volc_notify', val ? 'true' : 'false'); }
 };
 
-// ============ HTTP 请求 ============
+// ============ HTTP 请求（带超时） ============
 async function arkRequest(path, options = {}) {
   const config = await Store.getConfig();
   if (!config.apiKey) throw new Error('请先在设置中配置 API Key');
@@ -60,15 +67,25 @@ async function arkRequest(path, options = {}) {
   const url = ARK_BASE_URL + path;
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + config.apiKey, ...options.headers };
 
-  const res = await fetch(url, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 60000);
 
-  let data;
-  try { data = await res.json(); } catch { data = await res.text(); }
-  return { status: res.status, data };
+  try {
+    const res = await fetch(url, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    let data;
+    try { data = await res.json(); } catch { data = await res.text(); }
+    return { status: res.status, data };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') throw new Error('请求超时（60秒），请检查网络后重试');
+    throw e;
+  }
 }
 
 // ============ 图片生成 ============

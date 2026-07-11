@@ -141,3 +141,17 @@ select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.o
 .spinner { width: 40px; height: 40px; border: 3px solid var(--bg-tertiary); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-content p { color: var(--text-primary); font-size: 14px; }
+
+/* Preview index */
+.preview-index { position: absolute; top: 2px; left: 2px; background: rgba(0,212,170,0.9); color: #fff; font-size: 11px; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; z-index: 1; }
+
+/* Prompt suggestions */
+.prompt-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tag-suggestion { background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px; padding: 4px 8px; border-radius: 6px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-suggestion:active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+
+/* Clear text button */
+.btn-text { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; float: right; }
+
+/* Settings actions */
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }

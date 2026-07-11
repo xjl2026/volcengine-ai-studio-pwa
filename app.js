@@ -78,14 +78,35 @@ function escapeHtml(text) {
 
 // ============ 设置页 ============
 function initSettingsPage() {
+  renderApiKeySelect();
+
   document.getElementById('btnSaveSettings').onclick = async () => {
     const apiKey = document.getElementById('settingsApiKey').value.trim();
     const apiDomain = document.getElementById('settingsApiDomain').value.trim() || ARK_BASE_URL;
+    const label = document.getElementById('apiKeyLabel').value.trim() || '默认';
     if (!apiKey) { showToast('请输入 API Key', 'error'); return; }
+
+    // 保存到多 Key 列表
+    const keys = Store.getApiKeys();
+    const activeId = Store.getActiveKeyId();
+    let keyObj = keys.find(k => k.id === activeId);
+    if (keyObj) {
+      keyObj.key = apiKey; keyObj.label = label; keyObj.domain = apiDomain;
+    } else {
+      keyObj = { id: Date.now() + '', key: apiKey, label, domain: apiDomain };
+      keys.push(keyObj);
+      Store.setActiveKeyId(keyObj.id);
+    }
+    Store.saveApiKeys(keys);
     await Store.saveConfig({ apiKey, apiDomain });
+
+    // 保存通知设置
+    Store.setNotifySetting(document.getElementById('notifyOnComplete').checked);
+
     document.getElementById('configInfo').className = 'config-info success';
     document.getElementById('configInfo').textContent = '配置已保存';
     showToast('保存成功', 'success');
+    renderApiKeySelect();
     await updateApiStatus();
   };
 
@@ -100,6 +121,61 @@ function initSettingsPage() {
     info.textContent = result.message;
     showToast(result.message, result.success ? 'success' : 'error');
   };
+
+  document.getElementById('btnDeleteApiKey').onclick = () => {
+    const keys = Store.getApiKeys();
+    const activeId = Store.getActiveKeyId();
+    const filtered = keys.filter(k => k.id !== activeId);
+    Store.saveApiKeys(filtered);
+    if (filtered.length > 0) {
+      Store.setActiveKeyId(filtered[0].id);
+      Store.saveConfig({ apiKey: filtered[0].key, apiDomain: filtered[0].domain || ARK_BASE_URL });
+    } else {
+      Store.setActiveKeyId('');
+      Store.saveConfig({ apiKey: '', apiDomain: ARK_BASE_URL });
+    }
+    showToast('已删除', 'success');
+    renderApiKeySelect();
+    loadConfig();
+  };
+
+  document.getElementById('apiKeySelect').onchange = () => {
+    const keys = Store.getApiKeys();
+    const selectedId = document.getElementById('apiKeySelect').value;
+    const keyObj = keys.find(k => k.id === selectedId);
+    if (keyObj) {
+      Store.setActiveKeyId(keyObj.id);
+      Store.saveConfig({ apiKey: keyObj.key, apiDomain: keyObj.domain || ARK_BASE_URL });
+      loadConfig();
+    }
+  };
+
+  // 通知设置
+  document.getElementById('notifyOnComplete').checked = Store.getNotifySetting();
+}
+
+function renderApiKeySelect() {
+  const keys = Store.getApiKeys();
+  const select = document.getElementById('apiKeySelect');
+  const activeId = Store.getActiveKeyId();
+  select.innerHTML = '';
+  if (keys.length === 0) {
+    select.innerHTML = '<option value="">新建 Key...</option>';
+    document.getElementById('apiKeyLabel').value = '';
+    document.getElementById('settingsApiKey').value = '';
+  } else {
+    keys.forEach(k => {
+      const opt = document.createElement('option');
+      opt.value = k.id;
+      opt.textContent = k.label + ' (' + k.key.slice(0, 6) + '...' + ')';
+      if (k.id === activeId) opt.selected = true;
+      select.appendChild(opt);
+    });
+    const active = keys.find(k => k.id === activeId) || keys[0];
+    document.getElementById('apiKeyLabel').value = active.label;
+    document.getElementById('settingsApiKey').value = active.key;
+    document.getElementById('settingsApiDomain').value = active.domain || ARK_BASE_URL;
+  }
 }
 
 async function loadConfig() {
@@ -143,6 +219,13 @@ function initImagePage() {
 
   imgUploadCtrl = initUploadArea('imgUploadArea', 'imgFileInput', 'imgPreviewList', 14, imgs => imgRefImages = imgs);
   document.getElementById('btnGenImage').onclick = handleImageGenerate;
+
+  // 清空提示词
+  document.getElementById('btnClearImgPrompt').onclick = () => { document.getElementById('imgPrompt').value = ''; };
+  // 示例提示词
+  document.querySelectorAll('#imgPromptSuggestions .tag-suggestion').forEach(btn => {
+    btn.onclick = () => { document.getElementById('imgPrompt').value = btn.textContent; };
+  });
 }
 
 function updateImageModelUI() {
@@ -230,6 +313,7 @@ async function handleImageGenerate() {
       if (images.length > 0) {
         renderImageResults(images);
         showToast('生成成功！', 'success');
+        notifyTaskComplete('image', prompt);
         await Store.addHistory({ type: 'image', mode: getImgModeLabel(imgMode), prompt, params: { model, size: params.size }, result: images });
       } else { showToast('未返回图片数据', 'warning'); }
     } else { showToast('失败: ' + (result.error || ''), 'error'); }
@@ -274,6 +358,13 @@ function initVideoPage() {
   vidRefUploadCtrl = initUploadArea('vidRefUpload', 'vidRefInput', 'vidRefPreview', 9, imgs => vidRefImages = imgs);
   updateVideoModelUI(); updateVideoModeUI();
   document.getElementById('btnGenVideo').onclick = handleVideoGenerate;
+
+  // 清空提示词
+  document.getElementById('btnClearVidPrompt').onclick = () => { document.getElementById('vidPrompt').value = ''; };
+  // 示例提示词
+  document.querySelectorAll('#page-video .prompt-suggestions .tag-suggestion').forEach(btn => {
+    btn.onclick = () => { document.getElementById('vidPrompt').value = btn.textContent; };
+  });
 }
 
 function updateVideoModelUI() {
@@ -383,6 +474,7 @@ async function handleVideoGenerate() {
 
     showToast('任务已提交，生成中...', 'success');
     btn.textContent = '生成中...';
+    renderVideoTaskStatus('running', '视频生成中... 预计 1-3 分钟', 5, 0);
 
     const pollResult = await pollVideoTask(taskId, progress => {
       const labels = { queued: '排队中...', running: '生成中...', succeeded: '完成', failed: '失败' };
@@ -396,6 +488,7 @@ async function handleVideoGenerate() {
       if (videoUrl) {
         renderVideoResult(videoUrl, lastFrameUrl);
         showToast('生成成功！', 'success');
+        notifyTaskComplete('video', prompt);
         await Store.addHistory({ type: 'video', mode: getVidModeLabel(vidMode), prompt, params: {}, result: [videoUrl], thumbnail: videoUrl });
       } else { renderVideoTaskStatus('succeeded', '完成但未找到视频URL', 100); }
       clearPendingVideoTask();
@@ -547,7 +640,7 @@ function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
     files.forEach((f, idx) => {
       const item = document.createElement('div');
       item.className = 'preview-item';
-      item.innerHTML = '<img src="' + f.base64 + '"><button class="remove-btn" data-idx="' + idx + '">×</button>';
+      item.innerHTML = '<span class="preview-index">' + (idx + 1) + '</span><img src="' + f.base64 + '"><button class="remove-btn" data-idx="' + idx + '">×</button>';
       preview.appendChild(item);
     });
     preview.querySelectorAll('.remove-btn').forEach(btn => {
@@ -614,4 +707,31 @@ document.addEventListener('DOMContentLoaded', () => {
       if (confirm('确定清空所有历史记录？')) { await Store.clearHistory(); renderHistory(); showToast('已清空', 'success'); }
     };
   }, 100);
+
+  // 离线检测
+  window.addEventListener('online', () => { document.getElementById('offlineIndicator').style.display = 'none'; });
+  window.addEventListener('offline', () => { document.getElementById('offlineIndicator').style.display = 'block'; });
 });
+
+// ============ 通知提醒 ============
+function notifyTaskComplete(type, prompt) {
+  if (!Store.getNotifySetting()) return;
+  const title = type === 'video' ? '视频生成完成' : '图片生成完成';
+  const body = (prompt || '').slice(0, 50) + '...';
+  // 请求通知权限
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { new Notification(title, { body, icon: undefined }); } catch {}
+  }
+  // 震动
+  if ('vibrate' in navigator) {
+    navigator.vibrate([200, 100, 200]);
+  }
+  // 如果页面不可见，也弹 toast（回来后能看到）
+  if (document.hidden) {
+    showToast(title + '：' + body, 'success', 5000);
+  }
+}
+window.notifyTaskComplete = notifyTaskComplete;
