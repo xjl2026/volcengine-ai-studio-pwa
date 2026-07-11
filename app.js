@@ -21,6 +21,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+  // 恢复未完成的视频任务
+  restorePendingVideoTask();
+  // 监听页面可见性变化（手机切后台再切回来）
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      restorePendingVideoTask();
+    }
+  });
 });
 
 // ============ 导航 ============
@@ -370,6 +378,9 @@ async function handleVideoGenerate() {
     const taskId = submitResult.data?.id;
     if (!taskId) { renderVideoTaskStatus('failed', '未获取到任务ID', 0); return; }
 
+    // 保存任务到 localStorage，防止切后台丢失
+    savePendingVideoTask(taskId, vidMode);
+
     showToast('任务已提交，生成中...', 'success');
     btn.textContent = '生成中...';
 
@@ -387,12 +398,15 @@ async function handleVideoGenerate() {
         showToast('生成成功！', 'success');
         await Store.addHistory({ type: 'video', mode: getVidModeLabel(vidMode), prompt, params: {}, result: [videoUrl], thumbnail: videoUrl });
       } else { renderVideoTaskStatus('succeeded', '完成但未找到视频URL', 100); }
+      clearPendingVideoTask();
     } else if (pollResult.timeout && pollResult.taskId) {
       renderVideoTimeout(pollResult.taskId);
       showToast('轮询超时，可重试查询', 'warning');
+      // 保留 pending task
     } else {
       renderVideoTaskStatus('failed', pollResult.error || '失败', 0);
       showToast('生成失败', 'error');
+      clearPendingVideoTask();
     }
   } catch (e) {
     renderVideoTaskStatus('failed', e.message, 0);
@@ -441,13 +455,73 @@ function renderVideoTimeout(taskId) {
         const lf = result.data?.content?.last_frame_url;
         if (url) { renderVideoResult(url, lf); showToast('生成成功！', 'success'); await Store.addHistory({ type: 'video', mode: '视频', params: {}, result: [url], thumbnail: url }); }
         else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
+        clearPendingVideoTask();
       } else if (result.timeout && result.taskId) { renderVideoTimeout(result.taskId); showToast('仍未完成', 'warning'); }
-      else { renderVideoTaskStatus('failed', result.error || '失败', 0); }
+      else { renderVideoTaskStatus('failed', result.error || '失败', 0); clearPendingVideoTask(); }
     } catch (e) { renderVideoTaskStatus('failed', e.message, 0); }
   };
 }
 
-// ============ 上传区域 ============
+// ============ 待处理任务恢复 ============
+function savePendingVideoTask(taskId, vidModeSnapshot) {
+  localStorage.setItem('volc_pending_task', JSON.stringify({
+    taskId, vidMode: vidModeSnapshot, savedAt: Date.now()
+  }));
+}
+
+function clearPendingVideoTask() {
+  localStorage.removeItem('volc_pending_task');
+}
+
+async function restorePendingVideoTask() {
+  const raw = localStorage.getItem('volc_pending_task');
+  if (!raw) return;
+  let taskInfo;
+  try { taskInfo = JSON.parse(raw); } catch { clearPendingVideoTask(); return; }
+
+  // 超过 48 小时的任务清掉
+  if (Date.now() - taskInfo.savedAt > 48 * 3600 * 1000) {
+    clearPendingVideoTask();
+    return;
+  }
+
+  // 切到视频页，显示恢复中的状态
+  switchPage('video');
+  const btn = document.getElementById('btnGenVideo');
+  btn.disabled = true; btn.textContent = '恢复任务中...';
+  renderVideoTaskStatus('running', '正在恢复查询任务...', 10, 0);
+
+  try {
+    const result = await pollVideoTask(taskInfo.taskId, p => {
+      const labels = { queued: '排队中...', running: '生成中...', succeeded: '完成', failed: '失败' };
+      const percent = Math.min((p.attempt / 60) * 100, 90);
+      renderVideoTaskStatus(p.status, labels[p.status] || p.status, percent, p.attempt);
+    }, 5000, 240);
+
+    if (result.success) {
+      const url = result.data?.content?.video_url;
+      const lf = result.data?.content?.last_frame_url;
+      if (url) {
+        renderVideoResult(url, lf);
+        showToast('视频生成成功！', 'success');
+        await Store.addHistory({ type: 'video', mode: getVidModeLabel(taskInfo.vidMode || 'i2v'), params: {}, result: [url], thumbnail: url });
+      } else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
+      clearPendingVideoTask();
+    } else if (result.timeout && result.taskId) {
+      renderVideoTimeout(result.taskId);
+      showToast('任务仍在生成中，可稍后重试', 'warning');
+      // 保留 pending task，下次切回来还能恢复
+    } else {
+      renderVideoTaskStatus('failed', result.error || '失败', 0);
+      clearPendingVideoTask();
+    }
+  } catch (e) {
+    renderVideoTaskStatus('failed', e.message, 0);
+    clearPendingVideoTask();
+  } finally {
+    btn.disabled = false; btn.textContent = '生成视频';
+  }
+}
 function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
   const area = document.getElementById(areaId);
   const input = document.getElementById(inputId);
@@ -498,11 +572,36 @@ async function renderHistory() {
     const timeStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     let thumb = r.type === 'image' && r.result?.[0] ? '<img src="' + r.result[0] + '" loading="lazy">' :
       r.type === 'video' && r.thumbnail ? '<video src="' + r.thumbnail + '" muted></video>' : '<div class="history-thumb-placeholder">无预览</div>';
-    card.innerHTML = '<div class="history-thumb">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + (r.mode || '') + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + '</div></div><div class="history-actions"><button class="delete-btn" data-id="' + r.id + '">删除</button></div>';
+    const url = r.result?.[0] || '';
+    const downloadLabel = r.type === 'image' ? '下载图片' : '下载视频';
+    card.innerHTML = '<div class="history-thumb" data-url="' + url + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + (r.mode || '') + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + '</div></div><div class="history-actions"><a class="btn-secondary download-btn" href="' + url + '" download data-id="' + r.id + '">' + downloadLabel + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
     list.appendChild(card);
   });
+
+  // 缩略图/卡片点击：图片打开查看，视频内联播放
+  list.querySelectorAll('.history-thumb').forEach(thumb => {
+    thumb.style.cursor = 'pointer';
+    thumb.onclick = () => {
+      const url = thumb.dataset.url;
+      const type = thumb.dataset.type;
+      if (!url) return;
+      if (type === 'image') {
+        // 图片在新标签打开
+        window.open(url, '_blank');
+      } else {
+        // 视频：在结果面板内联播放
+        const panel = document.getElementById('vidResultPanel');
+        if (panel) {
+          switchPage('video');
+          panel.innerHTML = '<div class="result-content"><div class="result-item"><video src="' + url + '" controls autoplay loop></video><div class="result-actions"><a class="btn-secondary" href="' + url + '" download>下载视频</a><button class="btn-secondary copy-btn" data-url="' + url + '">复制链接</button></div></div></div>';
+          panel.querySelector('.copy-btn').onclick = () => { navigator.clipboard.writeText(url); showToast('已复制', 'success'); };
+        }
+      }
+    };
+  });
+
   list.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.onclick = async () => { await Store.removeHistory(btn.dataset.id); renderHistory(); showToast('已删除', 'success'); };
+    btn.onclick = async (e) => { e.stopPropagation(); await Store.removeHistory(btn.dataset.id); renderHistory(); showToast('已删除', 'success'); };
   });
 }
 window.renderHistory = renderHistory;
