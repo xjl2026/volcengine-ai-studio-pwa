@@ -45,7 +45,11 @@ function switchPage(name) {
   const nav = document.querySelector('.nav-item[data-page="' + name + '"]');
   if (page) page.classList.add('active');
   if (nav) nav.classList.add('active');
-  if (name === 'history') renderHistory();
+  // 历史记录只在首次进入时渲染，避免每次切换都重新加载缩略图
+  if (name === 'history' && !window._historyRendered) {
+    renderHistory();
+    window._historyRendered = true;
+  }
 }
 window.switchPage = switchPage;
 
@@ -315,6 +319,7 @@ async function handleImageGenerate() {
         showToast('生成成功！', 'success');
         notifyTaskComplete('image', prompt);
         await Store.addHistory({ type: 'image', mode: getImgModeLabel(imgMode), prompt, params: { model, size: params.size }, result: images });
+        window._historyRendered = false; // 有新记录，标记需要重新渲染
       } else { showToast('未返回图片数据', 'warning'); }
     } else { showToast('失败: ' + (result.error || ''), 'error'); }
   } catch (e) { hideLoading(); showToast('错误: ' + e.message, 'error'); }
@@ -490,6 +495,7 @@ async function handleVideoGenerate() {
         showToast('生成成功！', 'success');
         notifyTaskComplete('video', prompt);
         await Store.addHistory({ type: 'video', mode: getVidModeLabel(vidMode), prompt, params: {}, result: [videoUrl], thumbnail: videoUrl });
+        window._historyRendered = false;
       } else { renderVideoTaskStatus('succeeded', '完成但未找到视频URL', 100); }
       clearPendingVideoTask();
     } else if (pollResult.timeout && pollResult.taskId) {
@@ -671,31 +677,52 @@ async function renderHistory() {
     list.appendChild(card);
   });
 
-  // 缩略图/卡片点击：图片打开查看，视频内联播放
+  // 缩略图/卡片点击：图片打开查看，视频在历史页内弹出播放
   list.querySelectorAll('.history-thumb').forEach(thumb => {
     thumb.style.cursor = 'pointer';
     thumb.onclick = () => {
       const url = thumb.dataset.url;
       const type = thumb.dataset.type;
       if (!url) return;
-      if (type === 'image') {
-        // 图片在新标签打开
-        window.open(url, '_blank');
-      } else {
-        // 视频：在结果面板内联播放
-        const panel = document.getElementById('vidResultPanel');
-        if (panel) {
-          switchPage('video');
-          panel.innerHTML = '<div class="result-content"><div class="result-item"><video src="' + url + '" controls autoplay loop></video><div class="result-actions"><a class="btn-secondary" href="' + url + '" download>下载视频</a><button class="btn-secondary copy-btn" data-url="' + url + '">复制链接</button></div></div></div>';
-          panel.querySelector('.copy-btn').onclick = () => { navigator.clipboard.writeText(url); showToast('已复制', 'success'); };
-        }
-      }
+      showHistoryPreview(url, type);
     };
   });
 
   list.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.onclick = async (e) => { e.stopPropagation(); await Store.removeHistory(btn.dataset.id); renderHistory(); showToast('已删除', 'success'); };
+    btn.onclick = async (e) => { e.stopPropagation(); await Store.removeHistory(btn.dataset.id); renderHistory(); window._historyRendered = true; showToast('已删除', 'success'); };
   });
+}
+
+// ============ 历史记录预览弹窗 ============
+function showHistoryPreview(url, type) {
+  // 移除已有的弹窗
+  const existing = document.getElementById('historyPreviewModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'historyPreviewModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;';
+
+  let contentHtml = '';
+  if (type === 'image') {
+    contentHtml = '<img src="' + url + '" style="max-width:100%;max-height:75vh;border-radius:8px;">';
+  } else {
+    contentHtml = '<video src="' + url + '" controls autoplay loop style="max-width:100%;max-height:75vh;border-radius:8px;"></video>';
+  }
+
+  modal.innerHTML = '<div style="display:flex;gap:8px;margin-top:12px;">' +
+    '<a class="btn-secondary" href="' + url + '" download style="padding:8px 16px;background:var(--bg-tertiary);border-radius:8px;color:var(--text-primary);text-decoration:none;">下载</a>' +
+    '<button class="btn-secondary" id="btnCopyHistory" style="padding:8px 16px;background:var(--bg-tertiary);border-radius:8px;color:var(--text-primary);border:none;">复制链接</button>' +
+    '<button class="btn-secondary" id="btnClosePreview" style="padding:8px 16px;background:var(--danger);border-radius:8px;color:#fff;border:none;">关闭</button>' +
+    '</div>' + contentHtml;
+
+  // 关闭按钮
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  document.body.appendChild(modal);
+
+  document.getElementById('btnClosePreview').onclick = () => modal.remove();
+  document.getElementById('btnCopyHistory').onclick = () => { navigator.clipboard.writeText(url); showToast('已复制', 'success'); };
 }
 window.renderHistory = renderHistory;
 
