@@ -497,7 +497,7 @@ async function handleVideoGenerate() {
         renderVideoResult(videoUrl, lastFrameUrl);
         showToast('生成成功！', 'success');
         notifyTaskComplete('video', prompt);
-        await Store.addHistory({ type: 'video', mode: getVidModeLabel(vidMode), prompt, params: {}, result: [videoUrl], thumbnail: videoUrl });
+        await Store.addHistory({ type: 'video', mode: getVidModeLabel(vidMode), prompt, params: { model, resolution: params.resolution, ratio: params.ratio, duration: params.duration, seed: params.seed, audio: params.generateAudio, watermark: params.watermark }, result: [videoUrl], thumbnail: videoUrl });
         window._historyRendered = false;
       } else { renderVideoTaskStatus('succeeded', '完成但未找到视频URL', 100); }
       clearPendingVideoTask();
@@ -680,14 +680,13 @@ async function renderHistory() {
     list.appendChild(card);
   });
 
-  // 缩略图/卡片点击：图片打开查看，视频在历史页内弹出播放
+  // 缩略图/卡片点击：弹出详情面板（预览+参数+操作）
   list.querySelectorAll('.history-thumb').forEach(thumb => {
     thumb.style.cursor = 'pointer';
     thumb.onclick = () => {
-      const url = thumb.dataset.url;
-      const type = thumb.dataset.type;
-      if (!url) return;
-      showHistoryPreview(url, type);
+      const id = thumb.dataset.id;
+      const record = history.find(r => r.id === id);
+      if (record) showHistoryPreview(record);
     };
   });
 
@@ -696,38 +695,137 @@ async function renderHistory() {
   });
 }
 
-// ============ 历史记录预览弹窗 ============
-function showHistoryPreview(url, type) {
-  // 移除已有的弹窗
+// ============ 历史记录详情弹窗 ============
+function showHistoryPreview(record) {
   const existing = document.getElementById('historyPreviewModal');
   if (existing) existing.remove();
 
+  const url = record.result?.[0] || '';
+  const type = record.type;
+  const isImage = type === 'image';
+
   const modal = document.createElement('div');
   modal.id = 'historyPreviewModal';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;overflow-y:auto;';
 
-  let contentHtml = '';
-  if (type === 'image') {
-    contentHtml = '<img src="' + url + '" style="max-width:100%;max-height:75vh;border-radius:8px;">';
+  // 媒体预览
+  let mediaHtml = '';
+  if (isImage && url) {
+    mediaHtml = '<img src="' + url + '" style="max-width:100%;max-height:45vh;border-radius:8px;object-fit:contain;">';
+  } else if (url) {
+    mediaHtml = '<video src="' + url + '" controls autoplay loop style="max-width:100%;max-height:45vh;border-radius:8px;"></video>';
   } else {
-    contentHtml = '<video src="' + url + '" controls autoplay loop style="max-width:100%;max-height:75vh;border-radius:8px;"></video>';
+    mediaHtml = '<div style="color:#888;padding:40px;font-size:14px;">结果已过期或不可用</div>';
   }
 
-  modal.innerHTML = '<div style="display:flex;gap:8px;margin-top:12px;">' +
-    '<a class="btn-secondary" href="' + url + '" download style="padding:8px 16px;background:var(--bg-tertiary);border-radius:8px;color:var(--text-primary);text-decoration:none;">下载</a>' +
-    '<button class="btn-secondary" id="btnCopyHistory" style="padding:8px 16px;background:var(--bg-tertiary);border-radius:8px;color:var(--text-primary);border:none;">复制链接</button>' +
-    '<button class="btn-secondary" id="btnClosePreview" style="padding:8px 16px;background:var(--danger);border-radius:8px;color:#fff;border:none;">关闭</button>' +
-    '</div>' + contentHtml;
+  // 参数标签
+  const p = record.params || {};
+  let modelName = '';
+  if (p.model) {
+    const models = isImage ? IMAGE_MODELS : VIDEO_MODELS;
+    const m = models.find(m => m.id === p.model);
+    modelName = m ? m.name : p.model;
+  }
+  const paramItems = [];
+  if (modelName) paramItems.push(['模型', modelName]);
+  if (p.size) paramItems.push(['尺寸', p.size]);
+  if (p.resolution) paramItems.push(['分辨率', p.resolution]);
+  if (p.ratio) paramItems.push(['比例', p.ratio]);
+  if (p.duration) paramItems.push(['时长', p.duration + 's']);
+  if (p.seed !== undefined && p.seed !== -1 && p.seed !== 0) paramItems.push(['种子', p.seed]);
+  if (p.audio !== undefined) paramItems.push(['音频', p.audio ? '开启' : '关闭']);
+  if (p.watermark !== undefined) paramItems.push(['水印', p.watermark ? '有' : '无']);
+  const paramsHtml = paramItems.length > 0
+    ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">' +
+      paramItems.map(([k, v]) => '<span style="background:rgba(108,92,231,0.2);border:1px solid rgba(108,92,231,0.3);padding:3px 10px;border-radius:4px;font-size:12px;color:#c8b8ff;">' + k + ': ' + escapeHtml(String(v)) + '</span>').join('') + '</div>'
+    : '';
 
-  // 关闭按钮
+  // 详情面板
+  const date = record.createdAt ? new Date(record.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  const typeLabel = isImage ? '图片' : '视频';
+  const modeLabel = record.mode || '';
+  const detailHtml =
+    '<div style="width:100%;margin-top:12px;background:rgba(255,255,255,0.06);border-radius:12px;padding:14px 16px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+        '<span style="background:#6c5ce7;color:#fff;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + typeLabel + '</span>' +
+        '<span style="color:#a0a0b8;font-size:13px;">' + escapeHtml(modeLabel) + '</span>' +
+        '<span style="color:#666;font-size:12px;margin-left:auto;">' + date + '</span>' +
+      '</div>' +
+      '<div style="color:#e0e0e8;font-size:14px;line-height:1.6;word-break:break-all;background:rgba(0,0,0,0.25);padding:10px 12px;border-radius:8px;">' + escapeHtml(record.prompt || '(无提示词)') + '</div>' +
+      paramsHtml +
+    '</div>';
+
+  // 操作按钮
+  const actionsHtml =
+    '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;justify-content:center;">' +
+      (url ? '<a href="' + url + '" download style="padding:8px 14px;background:rgba(255,255,255,0.1);border-radius:8px;color:#fff;text-decoration:none;font-size:13px;">下载</a>' : '') +
+      (url ? '<button id="btnCopyLink" style="padding:8px 14px;background:rgba(255,255,255,0.1);border-radius:8px;color:#fff;border:none;font-size:13px;cursor:pointer;">复制链接</button>' : '') +
+      '<button id="btnCopyPrompt" style="padding:8px 14px;background:rgba(255,255,255,0.1);border-radius:8px;color:#fff;border:none;font-size:13px;cursor:pointer;">复制提示词</button>' +
+      '<button id="btnReuseParams" style="padding:8px 14px;background:#6c5ce7;border-radius:8px;color:#fff;border:none;font-size:13px;cursor:pointer;">用此参数生成</button>' +
+      '<button id="btnDeleteRecord" style="padding:8px 14px;background:#e74c3c;border-radius:8px;color:#fff;border:none;font-size:13px;cursor:pointer;">删除</button>' +
+      '<button id="btnClosePreview" style="padding:8px 14px;background:rgba(255,255,255,0.15);border-radius:8px;color:#fff;border:none;font-size:13px;cursor:pointer;">关闭</button>' +
+    '</div>';
+
+  modal.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;width:100%;max-width:520px;">' +
+    mediaHtml + detailHtml + actionsHtml + '</div>';
+
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-
   document.body.appendChild(modal);
 
   document.getElementById('btnClosePreview').onclick = () => modal.remove();
-  document.getElementById('btnCopyHistory').onclick = () => { navigator.clipboard.writeText(url); showToast('已复制', 'success'); };
+  if (url) {
+    document.getElementById('btnCopyLink').onclick = () => { navigator.clipboard.writeText(url); showToast('链接已复制', 'success'); };
+  }
+  document.getElementById('btnCopyPrompt').onclick = () => { navigator.clipboard.writeText(record.prompt || ''); showToast('提示词已复制', 'success'); };
+  document.getElementById('btnDeleteRecord').onclick = async () => {
+    await Store.removeHistory(record.id);
+    modal.remove();
+    window._historyRendered = false;
+    renderHistory();
+    showToast('已删除', 'success');
+  };
+  document.getElementById('btnReuseParams').onclick = () => {
+    modal.remove();
+    reuseHistoryParams(record);
+  };
+}
+
+// 用历史记录的参数重新生成
+function reuseHistoryParams(record) {
+  if (record.type === 'image') {
+    switchPage('image');
+    const promptEl = document.getElementById('imgPrompt');
+    if (promptEl && record.prompt) promptEl.value = record.prompt;
+    if (record.params?.model) {
+      const modelSelect = document.getElementById('imgModel');
+      if (modelSelect) { modelSelect.value = record.params.model; modelSelect.dispatchEvent(new Event('change')); }
+    }
+    if (record.params?.size) {
+      const sizeSelect = document.getElementById('imgSize');
+      if (sizeSelect) sizeSelect.value = record.params.size;
+    }
+    showToast('已填入参数，可调整后生成', 'success');
+  } else if (record.type === 'video') {
+    switchPage('video');
+    const promptEl = document.getElementById('vidPrompt');
+    if (promptEl && record.prompt) promptEl.value = record.prompt;
+    if (record.params?.model) {
+      const modelSelect = document.getElementById('vidModel');
+      if (modelSelect) { modelSelect.value = record.params.model; modelSelect.dispatchEvent(new Event('change')); }
+    }
+    if (record.params?.resolution) {
+      const el = document.getElementById('vidResolution');
+      if (el) el.value = record.params.resolution;
+    }
+    if (record.params?.duration) {
+      const el = document.getElementById('vidDuration');
+      if (el) el.value = record.params.duration;
+    }
+    showToast('已填入参数，图片需手动上传', 'success');
+  }
 }
 window.renderHistory = renderHistory;
+window.showHistoryPreview = showHistoryPreview;
 
 // ============ 清空历史 ============
 document.addEventListener('DOMContentLoaded', () => {
