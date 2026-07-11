@@ -114,6 +114,7 @@
           <button class="mode-tab active" data-vid-mode="t2v">文生视频</button>
           <button class="mode-tab" data-vid-mode="i2v-first">首帧</button>
           <button class="mode-tab" data-vid-mode="i2v-firsttail">首尾帧</button>
+          <button class="mode-tab" data-vid-mode="i2v-reference" id="vidRefTab">参考图</button>
         </div>
 
         <div class="form-group">
@@ -137,6 +138,15 @@
             <input type="file" id="vidTailInput" accept="image/*" style="display:none;">
           </div>
           <div class="preview-list" id="vidTailPreview"></div>
+        </div>
+
+        <div class="form-group" id="vidRefImageGroup" style="display:none;">
+          <label>参考图片 <span class="hint">图片仅作为角色/场景参考，不作为首帧</span></label>
+          <div class="upload-area" id="vidRefUpload">
+            <span>点击选择参考图片（最多9张）</span>
+            <input type="file" id="vidRefInput" accept="image/*" multiple style="display:none;">
+          </div>
+          <div class="preview-list" id="vidRefPreview"></div>
         </div>
 
         <div class="form-group">

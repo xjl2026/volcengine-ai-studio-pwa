@@ -15,15 +15,15 @@ const IMAGE_MODELS = [
 
 const VIDEO_MODELS = [
   { id: 'doubao-seedance-2-0-260128', name: 'Seedance 2.0', resolutions: ['480p', '720p', '1080p', '4k'], durationRange: [4, 15],
-    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15 } },
+    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9 } },
   { id: 'doubao-seedance-2-0-fast-260128', name: 'Seedance 2.0 Fast', resolutions: ['480p', '720p'], durationRange: [4, 15],
-    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15 } },
+    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9 } },
   { id: 'doubao-seedance-1-5-pro-251215', name: 'Seedance 1.5 Pro', resolutions: ['480p', '720p', '1080p'], durationRange: [4, 12],
-    caps: { generateAudio: true, seed: true, cameraFixed: true, frames: false, draft: true, serviceTier: false, adaptiveRatio: true, maxDuration: 12 } },
+    caps: { generateAudio: true, seed: true, cameraFixed: true, frames: false, draft: true, serviceTier: false, adaptiveRatio: true, maxDuration: 12, referenceImage: false, maxRefImages: 0 } },
   { id: 'doubao-seedance-1-0-pro-250528', name: 'Seedance 1.0 Pro', resolutions: ['480p', '720p', '1080p'], durationRange: [2, 12],
-    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12 } },
+    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0 } },
   { id: 'doubao-seedance-1-0-pro-fast-251015', name: 'Seedance 1.0 Pro Fast', resolutions: ['480p', '720p', '1080p'], durationRange: [2, 12],
-    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12 } }
+    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0 } }
 ];
 
 // ============ 配置存储（用 localStorage） ============
@@ -114,7 +114,11 @@ function buildVideoRequestBody(params) {
 
   if (prompt) body.content.push({ type: 'text', text: prompt });
   if (images && images.length > 0) {
-    images.forEach(url => body.content.push({ type: 'image_url', image_url: { url } }));
+    if (mode === 'i2v-reference') {
+      images.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' }));
+    } else {
+      images.forEach(url => body.content.push({ type: 'image_url', image_url: { url } }));
+    }
   }
   if (resolution) body.resolution = resolution;
   if (ratio) body.ratio = ratio;
