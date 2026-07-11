@@ -22,14 +22,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 初始化同步
   await initSync();
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      // 检测到新 SW 就等它激活，然后刷新页面
+      reg.addEventListener('updatefound', () => {
+        const newSW = reg.installing;
+        if (newSW) {
+          newSW.addEventListener('statechange', () => {
+            if (newSW.state === 'activated' && navigator.serviceWorker.controller) {
+              location.reload();
+            }
+          });
+        }
+      });
+      // 每次打开页面时主动检查更新
+      reg.update();
+    }).catch(() => {});
   }
-  // 恢复未完成的视频任务
-  restorePendingVideoTask();
-  // 监听页面可见性变化（手机切后台再切回来）
+  // 页面从后台切回前台时也检查 SW 更新
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       restorePendingVideoTask();
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.getRegistration().then(reg => reg && reg.update());
+      }
     }
   });
 });
