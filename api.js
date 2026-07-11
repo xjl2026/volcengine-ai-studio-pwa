@@ -41,22 +41,41 @@ const Store = {
     history.unshift(r);
     if (history.length > 500) history.length = 500;
     await this.saveHistory(history);
+    // 同步到云端
+    if (window.SyncManager && SyncManager.isEnabled()) {
+      try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); }
+    }
     return r;
   },
   async removeHistory(id) {
     const history = await this.getHistory();
+    const record = history.find(r => r.id === id);
     const filtered = history.filter(r => r.id !== id);
     await this.saveHistory(filtered);
+    // 从云端删除
+    if (record && record._syncId && window.SyncManager && SyncManager.isEnabled()) {
+      try { await SyncManager.deleteHistory(record._syncId); } catch (e) { console.warn('同步删除失败: ', e); }
+    }
     return filtered;
   },
-  async clearHistory() { localStorage.setItem('volc_history', '[]'); return []; },
+  async clearHistory() {
+    localStorage.setItem('volc_history', '[]');
+    // 清空云端
+    if (window.SyncManager && SyncManager.isEnabled()) {
+      try { await SyncManager.clearAllHistory(); } catch (e) { console.warn('同步清空失败: ', e); }
+    }
+    return [];
+  },
   // 多 API Key 管理
   getApiKeys() { try { return JSON.parse(localStorage.getItem('volc_api_keys')) || []; } catch { return []; } },
   saveApiKeys(keys) { localStorage.setItem('volc_api_keys', JSON.stringify(keys)); },
   getActiveKeyId() { return localStorage.getItem('volc_active_key_id') || ''; },
   setActiveKeyId(id) { localStorage.setItem('volc_active_key_id', id); },
   getNotifySetting() { return localStorage.getItem('volc_notify') !== 'false'; },
-  setNotifySetting(val) { localStorage.setItem('volc_notify', val ? 'true' : 'false'); }
+  setNotifySetting(val) { localStorage.setItem('volc_notify', val ? 'true' : 'false'); },
+  // 同步配置
+  getSyncConfig() { try { return JSON.parse(localStorage.getItem('volc_sync_config')) || { url: '', anonKey: '', syncKey: '' }; } catch { return { url: '', anonKey: '', syncKey: '' }; } },
+  saveSyncConfig(config) { localStorage.setItem('volc_sync_config', JSON.stringify(config)); }
 };
 
 // ============ HTTP 请求（带超时） ============

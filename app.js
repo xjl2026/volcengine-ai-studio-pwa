@@ -16,8 +16,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   initImagePage();
   initVideoPage();
   initSettingsPage();
+  initSyncSettings();
   await loadConfig();
   await updateApiStatus();
+  // 初始化同步
+  await initSync();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
@@ -762,3 +765,104 @@ function notifyTaskComplete(type, prompt) {
   }
 }
 window.notifyTaskComplete = notifyTaskComplete;
+
+// ============ 跨设备同步 ============
+async function initSync() {
+  const config = Store.getSyncConfig();
+  if (config.url && config.anonKey && config.syncKey) {
+    await SyncManager.configure(config.url, config.anonKey, config.syncKey);
+    await syncHistoryFromCloud();
+  }
+}
+
+async function syncHistoryFromCloud() {
+  if (!SyncManager.isEnabled()) return;
+  try {
+    const cloudRecords = await SyncManager.pullHistory();
+    if (cloudRecords.length === 0) {
+      // 云端为空，把本地记录全部推送上去
+      const localHistory = await Store.getHistory();
+      for (const record of localHistory) {
+        const syncId = await SyncManager.pushHistory(record);
+        if (syncId) record._syncId = syncId;
+      }
+      await Store.saveHistory(localHistory);
+      return;
+    }
+    // 合并云端和本地记录
+    const localHistory = await Store.getHistory();
+    const localIds = new Set(localHistory.map(r => r.id));
+    const cloudIds = new Set(cloudRecords.map(r => r.id));
+    // 添加云端有但本地没有的
+    const merged = [...localHistory];
+    for (const cr of cloudRecords) {
+      if (!localIds.has(cr.id)) merged.push(cr);
+    }
+    // 给本地有但云端没有的记录推送上去
+    for (const lr of localHistory) {
+      if (!lr._syncId && !cloudIds.has(lr.id)) {
+        const syncId = await SyncManager.pushHistory(lr);
+        if (syncId) lr._syncId = syncId;
+      }
+    }
+    // 按 createdAt 降序排列
+    merged.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    if (merged.length > 500) merged.length = 500;
+    await Store.saveHistory(merged);
+    window._historyRendered = false;
+  } catch (e) {
+    console.warn('同步历史记录失败: ', e);
+  }
+}
+
+function initSyncSettings() {
+  const config = Store.getSyncConfig();
+  document.getElementById('syncUrl').value = config.url || '';
+  document.getElementById('syncAnonKey').value = config.anonKey || '';
+  document.getElementById('syncKey').value = config.syncKey || '';
+  updateSyncStatus();
+
+  document.getElementById('btnSaveSync').onclick = async () => {
+    const url = document.getElementById('syncUrl').value.trim();
+    const anonKey = document.getElementById('syncAnonKey').value.trim();
+    const syncKey = document.getElementById('syncKey').value.trim();
+    if (url && anonKey && syncKey) {
+      Store.saveSyncConfig({ url, anonKey, syncKey });
+      await SyncManager.configure(url, anonKey, syncKey);
+      updateSyncStatus();
+      showToast('同步设置已保存，正在同步...', 'success');
+      await syncHistoryFromCloud();
+      showToast('同步完成', 'success');
+    } else if (!url && !anonKey && !syncKey) {
+      Store.saveSyncConfig({ url: '', anonKey: '', syncKey: '' });
+      await SyncManager.configure('', '', '');
+      updateSyncStatus();
+      showToast('已关闭同步', 'success');
+    } else {
+      showToast('请填写完整或全部留空', 'warning');
+    }
+  };
+
+  document.getElementById('btnTestSync').onclick = async () => {
+    const url = document.getElementById('syncUrl').value.trim();
+    const anonKey = document.getElementById('syncAnonKey').value.trim();
+    if (!url || !anonKey) { showToast('请填写 URL 和 Anon Key', 'warning'); return; }
+    await SyncManager.configure(url, anonKey, '');
+    showLoading('测试连接中...');
+    const result = await SyncManager.testConnection();
+    hideLoading();
+    showToast(result.message, result.success ? 'success' : 'error');
+  };
+}
+
+function updateSyncStatus() {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  if (SyncManager.isEnabled()) {
+    el.textContent = '同步已开启';
+    el.style.color = '#00d4aa';
+  } else {
+    el.textContent = '同步未开启';
+    el.style.color = '#a0a0b8';
+  }
+}

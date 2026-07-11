@@ -159,12 +159,33 @@
           <label><input type="checkbox" id="notifyOnComplete" checked> 任务完成时推送通知</label>
         </div>
         <div class="config-info" id="configInfo"></div>
+
+        <div class="sync-section" style="margin-top:20px;padding:16px;background:var(--bg-tertiary);border-radius:12px;">
+          <h3 style="margin:0 0 4px 0;font-size:16px;">跨设备同步</h3>
+          <p class="hint" style="margin:0 0 12px 0;">填写后历史记录可在不同设备间同步（数据加密存储）</p>
+          <div id="syncStatus" style="font-size:13px;margin-bottom:12px;font-weight:600;">同步未开启</div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <input type="text" id="syncUrl" placeholder="Supabase URL" style="font-size:13px;">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <input type="password" id="syncAnonKey" placeholder="Supabase Anon Key" style="font-size:13px;">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <input type="password" id="syncKey" placeholder="同步密钥（所有设备填一样的）" style="font-size:13px;">
+          </div>
+          <div class="settings-actions">
+            <button class="btn-secondary" id="btnTestSync">测试连接</button>
+            <button class="btn-primary" id="btnSaveSync">保存</button>
+          </div>
+        </div>
+
         <div class="help-section">
           <h3>使用帮助</h3>
           <div class="help-item"><strong>1. 获取 API Key</strong><p>火山引擎控制台 → 火山方舟 → API Key 管理</p></div>
           <div class="help-item"><strong>2. 开通模型</strong><p>在方舟控制台开通 Seedream(图片) 和 Seedance(视频)</p></div>
           <div class="help-item"><strong>3. 多 Key 管理</strong><p>可保存多个 API Key，通过下拉框切换</p></div>
-          <div class="help-item"><strong>4. 数据安全</strong><p>所有数据仅保存在本地，不会上传</p></div>
+          <div class="help-item"><strong>4. 跨设备同步</strong><p>在设置中填写 Supabase 信息和同步密钥，所有设备填同样的密钥即可同步历史记录。数据加密存储，无密钥无法解密。</p></div>
+          <div class="help-item"><strong>5. 数据安全</strong><p>API Key 仅保存在本地。同步的历史记录使用 AES-GCM 加密，即使数据库泄露也无法读取。</p></div>
         </div>
       </section>
     </main>
@@ -177,6 +198,7 @@
   <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;background:#ff4d6d;color:#fff;text-align:center;padding:6px;font-size:13px;z-index:9999;">网络已断开</div>
 
   <script src="api.js"></script>
+  <script src="sync.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
