@@ -677,17 +677,13 @@ async function renderHistory() {
     const url = r.result?.[0] || '';
     const downloadLabel = r.type === 'image' ? '下载图片' : '下载视频';
     card.innerHTML = '<div class="history-thumb" data-url="' + url + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + (r.mode || '') + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + '</div></div><div class="history-actions"><a class="btn-secondary download-btn" href="' + url + '" download data-id="' + r.id + '">' + downloadLabel + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
-    list.appendChild(card);
-  });
-
-  // 缩略图/卡片点击：弹出详情面板（预览+参数+操作）
-  list.querySelectorAll('.history-thumb').forEach(thumb => {
-    thumb.style.cursor = 'pointer';
-    thumb.onclick = () => {
-      const id = thumb.dataset.id;
-      const record = history.find(r => r.id === id);
-      if (record) showHistoryPreview(record);
+    // 整个卡片可点击打开详情
+    card.style.cursor = 'pointer';
+    card.onclick = (e) => {
+      if (e.target.closest('.history-actions')) return; // 点下载/删除按钮不触发
+      showHistoryPreview(r);
     };
+    list.appendChild(card);
   });
 
   list.querySelectorAll('.delete-btn').forEach(btn => {
@@ -706,14 +702,14 @@ function showHistoryPreview(record) {
 
   const modal = document.createElement('div');
   modal.id = 'historyPreviewModal';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;overflow-y:auto;';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:16px;padding-top:env(safe-area-inset-top,16px);overflow-y:auto;';
 
   // 媒体预览
   let mediaHtml = '';
   if (isImage && url) {
     mediaHtml = '<img src="' + url + '" style="max-width:100%;max-height:45vh;border-radius:8px;object-fit:contain;">';
   } else if (url) {
-    mediaHtml = '<video src="' + url + '" controls autoplay loop style="max-width:100%;max-height:45vh;border-radius:8px;"></video>';
+    mediaHtml = '<video src="' + url + '" controls loop style="max-width:100%;max-height:45vh;border-radius:8px;"></video>';
   } else {
     mediaHtml = '<div style="color:#888;padding:40px;font-size:14px;">结果已过期或不可用</div>';
   }
