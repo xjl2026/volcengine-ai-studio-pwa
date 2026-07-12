@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.9';
+const APP_VERSION = '1.3.10';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -179,12 +179,19 @@ function initSettingsPage() {
     const apiKey = document.getElementById('settingsApiKey').value.trim();
     if (!apiKey) { showToast('请输入 API Key', 'error'); return; }
     showLoading('测试连接中...');
-    const result = await testConnection(apiKey, ARK_BASE_URL);
+    try {
+      const result = await testConnection(apiKey, ARK_BASE_URL);
+      const info = document.getElementById('configInfo');
+      info.className = 'config-info ' + (result.success ? 'success' : 'error');
+      info.textContent = result.message;
+      showToast(result.message, result.success ? 'success' : 'error');
+    } catch (e) {
+      const info = document.getElementById('configInfo');
+      info.className = 'config-info error';
+      info.textContent = '连接失败: ' + e.message;
+      showToast('连接失败: ' + e.message, 'error');
+    }
     hideLoading();
-    const info = document.getElementById('configInfo');
-    info.className = 'config-info ' + (result.success ? 'success' : 'error');
-    info.textContent = result.message;
-    showToast(result.message, result.success ? 'success' : 'error');
   };
 
   document.getElementById('btnDeleteApiKey').onclick = () => {

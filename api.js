@@ -281,10 +281,20 @@ async function pollVideoTask(taskId, onProgress, interval, maxAttempts) {
 
 // ============ 测试连接 ============
 async function testConnection(apiKey, apiDomain) {
-  const res = await fetch((apiDomain || ARK_BASE_URL).replace(/\/$/, '') + '/api/v3/models', {
-    headers: { 'Authorization': 'Bearer ' + apiKey }
-  });
-  return { success: res.status === 200, message: res.status === 200 ? '连接成功' : 'HTTP ' + res.status };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch((apiDomain || ARK_BASE_URL).replace(/\/$/, '') + '/api/v3/models', {
+      headers: { 'Authorization': 'Bearer ' + apiKey },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    return { success: res.status === 200, message: res.status === 200 ? '连接成功' : 'HTTP ' + res.status };
+  } catch (e) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError') return { success: false, message: '连接超时（10秒），请检查网络' };
+    return { success: false, message: e.message || '网络错误' };
+  }
 }
 
 // ============ 文件读取为 base64 ============
