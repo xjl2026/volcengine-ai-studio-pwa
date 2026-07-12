@@ -514,27 +514,8 @@ function updateVideoModelUI() {
   document.getElementById('vidPriorityGroup').style.display = caps.priority ? 'block' : 'none';
   updateCameraFixedVisibility(caps);
 
-  // 图生视频模式下，参考图区域按模型能力显示
-  const refGroup = document.getElementById('vidRefImageGroup');
-  const refVideoGroup = document.getElementById('vidRefVideoGroup');
-  const refAudioGroup = document.getElementById('vidRefAudioGroup');
-  if (vidMode === 'i2v' && caps.referenceImage) {
-    refGroup.style.display = 'block';
-  } else {
-    refGroup.style.display = 'none';
-  }
-  if (vidMode === 'i2v' && caps.referenceVideo) {
-    refVideoGroup.style.display = 'block';
-  } else {
-    refVideoGroup.style.display = 'none';
-    if (vidRefVideoUploadCtrl) vidRefVideoUploadCtrl.clear();
-  }
-  if (vidMode === 'i2v' && caps.referenceAudio) {
-    refAudioGroup.style.display = 'block';
-  } else {
-    refAudioGroup.style.display = 'none';
-    if (vidRefAudioUploadCtrl) vidRefAudioUploadCtrl.clear();
-  }
+  // 图生视频模式下，参考图/视频/音频区域按模型能力显示（统一调用 updateVideoModeUI）
+  updateVideoModeUI();
 }
 
 function updateCameraFixedVisibility(caps) {
@@ -545,17 +526,26 @@ function updateVideoModeUI() {
   const ff = document.getElementById('vidFirstFrameGroup');
   const tf = document.getElementById('vidTailFrameGroup');
   const rf = document.getElementById('vidRefImageGroup');
+  const rv = document.getElementById('vidRefVideoGroup');
+  const ra = document.getElementById('vidRefAudioGroup');
   ff.style.display = 'none'; tf.style.display = 'none'; rf.style.display = 'none';
+  rv.style.display = 'none'; ra.style.display = 'none';
 
   if (vidMode === 'i2v') {
     ff.style.display = 'block';
     const model = document.getElementById('vidModel').value;
     const mi = VIDEO_MODELS.find(m => m.id === model);
-    // 改动 13: 1.0 Pro Fast 不支持尾帧
-    const supportsTail = mi && mi.id !== 'doubao-seedance-1-0-pro-fast-251015';
-    tf.style.display = supportsTail ? 'block' : 'none';
-    if (!supportsTail && vidTailUploadCtrl) vidTailUploadCtrl.clear();
-    if (mi && mi.caps.referenceImage) rf.style.display = 'block';
+    if (mi) {
+      const caps = mi.caps;
+      // 改动 13: 1.0 Pro Fast 不支持尾帧
+      const supportsTail = mi.id !== 'doubao-seedance-1-0-pro-fast-251015';
+      tf.style.display = supportsTail ? 'block' : 'none';
+      if (!supportsTail && vidTailUploadCtrl) vidTailUploadCtrl.clear();
+      // 参考图/视频/音频 按 caps 显示
+      if (caps.referenceImage) rf.style.display = 'block';
+      if (caps.referenceVideo) rv.style.display = 'block';
+      if (caps.referenceAudio) ra.style.display = 'block';
+    }
   } else {
     if (vidFirstUploadCtrl) vidFirstUploadCtrl.clear();
     if (vidTailUploadCtrl) vidTailUploadCtrl.clear();
