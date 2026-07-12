@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.8';
+const APP_VERSION = '1.3.9';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -1194,6 +1194,13 @@ function reuseHistoryParams(record) {
 window.renderHistory = renderHistory;
 window.showHistoryPreview = showHistoryPreview;
 
+// ============ 选择模式 + 连续播放 变量声明 ============
+let isSelectMode = false;
+let selectedRecords = new Set();
+let playlistVideos = [];
+let playlistIndex = 0;
+let playlistVideoEl = null;
+
 // ============ 清空历史 ============
 setTimeout(() => {
   const btn = document.getElementById('btnClearHistory');
@@ -1239,12 +1246,6 @@ function notifyTaskComplete(type, prompt) {
 window.notifyTaskComplete = notifyTaskComplete;
 
 // ============ 历史记录选择模式 + 连续播放 ============
-let isSelectMode = false;
-let selectedRecords = new Set();
-let playlistVideos = [];
-let playlistIndex = 0;
-let playlistVideoEl = null;
-
 function initSelectMode() {
   const toggleBtn = document.getElementById('btnToggleSelect');
   const batchBar = document.getElementById('batchActionsBar');
