@@ -117,7 +117,7 @@ async function arkRequest(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + config.apiKey, ...options.headers };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 180000);
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 600000);
   // 支持外部 AbortController（用于用户手动取消）
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
@@ -177,7 +177,7 @@ function buildImageRequestBody(params) {
 
 async function generateImage(params) {
   const requestBody = buildImageRequestBody(params);
-  const result = await arkRequest('/api/v3/images/generations', { method: 'POST', body: requestBody, signal: params.signal, timeout: 180000 });
+  const result = await arkRequest('/api/v3/images/generations', { method: 'POST', body: requestBody, signal: params.signal, timeout: 600000 });
   if (result.status >= 200 && result.status < 300) return { success: true, data: result.data };
   return { success: false, error: result.data?.error?.message || 'HTTP ' + result.status };
 }
