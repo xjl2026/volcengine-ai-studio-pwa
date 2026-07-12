@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.15';
+const APP_VERSION = '1.4.0';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -72,7 +72,7 @@ function switchPage(name) {
   // 离开历史页时退出选择模式
   if (name !== 'history' && isSelectMode) {
     isSelectMode = false;
-    selectedRecords.clear();
+    selectedRecords = [];
     updateSelectModeUI();
   }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1204,10 +1204,13 @@ window.showHistoryPreview = showHistoryPreview;
 
 // ============ 选择模式 + 连续播放 变量声明 ============
 let isSelectMode = false;
-let selectedRecords = new Set();
+let selectedRecords = []; // 数组，按勾选顺序记录 id
 let playlistVideos = [];
 let playlistIndex = 0;
 let playlistVideoEl = null;
+let playlistVideoEl2 = null; // 第二个 video 元素，用于无缝切换
+let playlistActiveEl = null; // 当前正在播放的 video 元素
+let playlistPreloadedIdx = -1; // 正在预加载的索引
 
 // ============ 清空历史 ============
 setTimeout(() => {
@@ -1216,7 +1219,7 @@ setTimeout(() => {
     if (confirm('确定清空所有历史记录？')) {
       await Store.clearHistory();
       // 退出选择模式
-      if (isSelectMode) { isSelectMode = false; selectedRecords.clear(); updateSelectModeUI(); }
+      if (isSelectMode) { isSelectMode = false; selectedRecords = []; updateSelectModeUI(); }
       renderHistory();
       showToast('已清空', 'success');
     }
@@ -1260,7 +1263,7 @@ function initSelectMode() {
 
   toggleBtn.onclick = () => {
     isSelectMode = !isSelectMode;
-    selectedRecords.clear();
+    selectedRecords = [];
     updateSelectModeUI();
   };
 
@@ -1268,10 +1271,10 @@ function initSelectMode() {
   document.getElementById('btnSelectAll').onclick = async () => {
     const history = await Store.getHistory();
     const videos = history.filter(r => r.type === 'video' && r.result?.[0]);
-    if (selectedRecords.size === videos.length) {
-      selectedRecords.clear();
+    if (selectedRecords.length === videos.length) {
+      selectedRecords = [];
     } else {
-      videos.forEach(r => selectedRecords.add(r.id));
+      selectedRecords = videos.map(r => r.id);
     }
     updateSelectModeUI();
   };
@@ -1307,7 +1310,7 @@ function updateSelectModeUI() {
   }
 
   // 更新选中计数
-  document.getElementById('batchSelectedCount').textContent = '已选 ' + selectedRecords.size + ' 个';
+  document.getElementById('batchSelectedCount').textContent = '已选 ' + selectedRecords.length + ' 个';
 
   // 重新渲染历史记录以更新选中状态
   renderHistorySelectMode();
@@ -1327,7 +1330,7 @@ async function renderHistorySelectMode() {
     const card = document.createElement('div');
     card.className = 'history-card';
     if (isSelectMode) card.classList.add('select-mode');
-    if (selectedRecords.has(r.id)) card.classList.add('selected');
+    if (selectedRecords.includes(r.id)) card.classList.add('selected');
 
     const date = new Date(r.createdAt);
     const timeStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -1342,7 +1345,7 @@ async function renderHistorySelectMode() {
     const statusColor = r.status === 'pending' || r.status === 'timeout' ? '#ffb443' : r.status === 'failed' ? '#ff4d6d' : '';
     const statusHtml = statusLabel ? '<span style="color:' + statusColor + ';">' + statusLabel + '</span>' : '';
 
-    card.innerHTML = '<input type="checkbox" class="select-checkbox" ' + (selectedRecords.has(r.id) ? 'checked' : '') + '>' +
+    card.innerHTML = '<input type="checkbox" class="select-checkbox" ' + (selectedRecords.includes(r.id) ? 'checked' : '') + '>' +
       '<div class="history-thumb" data-url="' + escapeAttr(url) + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div>' +
       '<div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + escapeHtml(r.mode || '') + statusHtml + '</span>' +
       '<div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div>' +
@@ -1354,10 +1357,11 @@ async function renderHistorySelectMode() {
       if (isSelectMode && r.type === 'video' && r.result?.[0]) {
         e.stopPropagation();
         e.preventDefault();
-        if (selectedRecords.has(r.id)) {
-          selectedRecords.delete(r.id);
+        const idx = selectedRecords.indexOf(r.id);
+        if (idx >= 0) {
+          selectedRecords.splice(idx, 1);
         } else {
-          selectedRecords.add(r.id);
+          selectedRecords.push(r.id);
         }
         updateSelectModeUI();
         return;
@@ -1378,9 +1382,10 @@ async function renderHistorySelectMode() {
         return;
       }
       if (checkbox.checked) {
-        selectedRecords.add(r.id);
+        selectedRecords.push(r.id);
       } else {
-        selectedRecords.delete(r.id);
+        const idx = selectedRecords.indexOf(r.id);
+        if (idx >= 0) selectedRecords.splice(idx, 1);
       }
       updateSelectModeUI();
     };
@@ -1393,7 +1398,8 @@ async function renderHistorySelectMode() {
     const delBtn = card.querySelector('.delete-btn');
     if (delBtn) delBtn.onclick = async (e) => {
       e.stopPropagation();
-      selectedRecords.delete(r.id);
+      const idx = selectedRecords.indexOf(r.id);
+      if (idx >= 0) selectedRecords.splice(idx, 1);
       await Store.removeHistory(r.id);
       window._historyRendered = false;
       renderHistorySelectMode();
@@ -1417,22 +1423,33 @@ renderHistory = async function() {
 // ============ 连续播放播放器 ============
 function initPlaylistPlayer() {
   playlistVideoEl = document.getElementById('playlistVideo');
+  playlistVideoEl2 = document.getElementById('playlistVideo2');
+  playlistActiveEl = playlistVideoEl;
 
   document.getElementById('btnPlaylistClose').onclick = closePlaylist;
   document.getElementById('btnPlaylistPrev').onclick = playPrev;
   document.getElementById('btnPlaylistNext').onclick = playNext;
   document.getElementById('btnPlaylistPlayPause').onclick = togglePlayPause;
 
-  playlistVideoEl.addEventListener('ended', () => {
-    playNext();
-  });
+  // 当前视频播完 → 切到预加载好的下一段
+  const onEnded = () => {
+    if (playlistIndex < playlistVideos.length - 1) {
+      swapToNextVideo();
+    } else {
+      closePlaylist();
+      showToast('播放列表已全部播完', 'success');
+    }
+  };
+  playlistVideoEl.addEventListener('ended', onEnded);
+  playlistVideoEl2.addEventListener('ended', onEnded);
 
-  playlistVideoEl.addEventListener('play', () => {
-    document.getElementById('btnPlaylistPlayPause').textContent = '⏸';
-  });
-  playlistVideoEl.addEventListener('pause', () => {
-    document.getElementById('btnPlaylistPlayPause').textContent = '▶';
-  });
+  // 播放/暂停按钮图标
+  const onPlay = () => { document.getElementById('btnPlaylistPlayPause').textContent = '⏸'; };
+  const onPause = () => { document.getElementById('btnPlaylistPlayPause').textContent = '▶'; };
+  playlistVideoEl.addEventListener('play', onPlay);
+  playlistVideoEl2.addEventListener('play', onPlay);
+  playlistVideoEl.addEventListener('pause', onPause);
+  playlistVideoEl2.addEventListener('pause', onPause);
 
   // 物理返回键关闭播放器
   window.addEventListener('popstate', (e) => {
@@ -1446,8 +1463,10 @@ function initPlaylistPlayer() {
 
 async function startPlaylist() {
   const history = await Store.getHistory();
-  // 按选中的顺序获取视频 URL
-  const selected = history.filter(r => selectedRecords.has(r.id) && r.result?.[0]);
+  // 按 selectedRecords 数组顺序（即用户勾选顺序）获取视频
+  const selected = selectedRecords
+    .map(id => history.find(r => r.id === id))
+    .filter(r => r && r.result?.[0]);
   playlistVideos = selected.map(r => ({
     url: r.result[0],
     prompt: r.prompt || '',
@@ -1469,10 +1488,59 @@ async function startPlaylist() {
 function loadPlaylistVideo(idx) {
   if (idx < 0 || idx >= playlistVideos.length) return;
   const v = playlistVideos[idx];
-  playlistVideoEl.src = v.url;
-  playlistVideoEl.load();
-  playlistVideoEl.play().catch(() => {});
+  // 设置当前活跃 video 元素的源并播放
+  playlistActiveEl.src = v.url;
+  playlistActiveEl.load();
+  playlistActiveEl.play().catch(() => {});
   updatePlaylistUI();
+  // 预加载下一段
+  preloadNextVideo(idx + 1);
+}
+
+// 预加载下一段视频到非活跃的 video 元素
+function preloadNextVideo(idx) {
+  if (idx < 0 || idx >= playlistVideos.length) {
+    playlistPreloadedIdx = -1;
+    return;
+  }
+  const v = playlistVideos[idx];
+  const inactiveEl = (playlistActiveEl === playlistVideoEl) ? playlistVideoEl2 : playlistVideoEl;
+  // 只设置 src，不播放，让浏览器自动缓冲
+  inactiveEl.src = v.url;
+  inactiveEl.load();
+  // load() 后浏览器会自动开始缓冲，不需要 play()
+  playlistPreloadedIdx = idx;
+}
+
+// 无缝切换：当前视频 ended 时，切换到已经预加载好的另一个 video 元素
+function swapToNextVideo() {
+  const nextIdx = playlistIndex + 1;
+  if (nextIdx >= playlistVideos.length) return;
+
+  const currentEl = playlistActiveEl;
+  const nextEl = (currentEl === playlistVideoEl) ? playlistVideoEl2 : playlistVideoEl;
+
+  // 如果预加载的就是下一段，直接切换
+  if (playlistPreloadedIdx === nextIdx && nextEl.src) {
+    // 暂停当前
+    currentEl.pause();
+    currentEl.removeAttribute('src');
+    currentEl.load();
+    currentEl.style.display = 'none';
+
+    // 显示并播放下一段
+    nextEl.style.display = '';
+    playlistActiveEl = nextEl;
+    playlistIndex = nextIdx;
+    nextEl.play().catch(() => {});
+    updatePlaylistUI();
+    // 预加载下下一段
+    preloadNextVideo(nextIdx + 1);
+  } else {
+    // 没有预加载好，退回到普通加载
+    playlistIndex = nextIdx;
+    loadPlaylistVideo(nextIdx);
+  }
 }
 
 function updatePlaylistUI() {
@@ -1485,8 +1553,13 @@ function updatePlaylistUI() {
 
 function playNext() {
   if (playlistIndex < playlistVideos.length - 1) {
-    playlistIndex++;
-    loadPlaylistVideo(playlistIndex);
+    // 如果下一段已经预加载好了，用无缝切换
+    if (playlistPreloadedIdx === playlistIndex + 1) {
+      swapToNextVideo();
+    } else {
+      playlistIndex++;
+      loadPlaylistVideo(playlistIndex);
+    }
   } else {
     closePlaylist();
     showToast('播放列表已全部播完', 'success');
@@ -1501,17 +1574,24 @@ function playPrev() {
 }
 
 function togglePlayPause() {
-  if (playlistVideoEl.paused) {
-    playlistVideoEl.play().catch(() => {});
+  if (playlistActiveEl.paused) {
+    playlistActiveEl.play().catch(() => {});
   } else {
-    playlistVideoEl.pause();
+    playlistActiveEl.pause();
   }
 }
 
 function closePlaylist() {
   playlistVideoEl.pause();
+  playlistVideoEl2.pause();
   playlistVideoEl.removeAttribute('src');
+  playlistVideoEl2.removeAttribute('src');
   playlistVideoEl.load();
+  playlistVideoEl2.load();
+  playlistVideoEl.style.display = '';
+  playlistVideoEl2.style.display = 'none';
+  playlistActiveEl = playlistVideoEl;
+  playlistPreloadedIdx = -1;
   document.getElementById('playlistPlayer').style.display = 'none';
   document.body.style.overflow = '';
 }
