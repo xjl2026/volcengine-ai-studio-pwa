@@ -22,12 +22,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Inject build version
+        run: |
+          BUILD_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+          CACHE_VER="volc-ai-$(date +%s)"
+          echo "Build: $BUILD_TIME | Cache: $CACHE_VER"
+          sed -i "s|APP_BUILD = '[^']*'|APP_BUILD = '$BUILD_TIME'|g" app.js
+          sed -i "s|CACHE_NAME = '[^']*'|CACHE_NAME = '$CACHE_VER'|g" sw.js
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
