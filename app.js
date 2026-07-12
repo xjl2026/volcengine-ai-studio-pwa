@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -1494,7 +1494,14 @@ function loadPlaylistVideo(idx) {
   // 设置当前活跃 video 元素的源并播放
   playlistActiveEl.src = v.url;
   playlistActiveEl.load();
-  playlistActiveEl.play().catch(() => {});
+  // 先去掉 controls 防止 iOS 自动弹出控制条
+  playlistActiveEl.removeAttribute('controls');
+  playlistActiveEl.play().then(() => {
+    // 播起来后加回 controls，用户轻触才显示
+    playlistActiveEl.setAttribute('controls', '');
+  }).catch(() => {
+    playlistActiveEl.setAttribute('controls', '');
+  });
   updatePlaylistUI();
   // 预加载下一段
   preloadNextVideo(idx + 1);
@@ -1533,9 +1540,14 @@ function swapToNextVideo() {
 
     // 显示并播放下一段
     nextEl.style.display = '';
+    nextEl.removeAttribute('controls'); // 先隐藏控制条
     playlistActiveEl = nextEl;
     playlistIndex = nextIdx;
-    nextEl.play().catch(() => {});
+    nextEl.play().then(() => {
+      nextEl.setAttribute('controls', ''); // 播起来后再加回
+    }).catch(() => {
+      nextEl.setAttribute('controls', '');
+    });
     updatePlaylistUI();
     // 预加载下下一段
     preloadNextVideo(nextIdx + 1);
