@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.3.6';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -35,16 +35,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 恢复未完成的视频任务（页面重新加载时）
   restorePendingVideoTask();
   if ('serviceWorker' in navigator) {
-    // 先清掉所有旧的 Service Worker 缓存
-    if (window.caches) {
-      caches.keys().then(keys => {
-        keys.forEach(k => {
-          if (k !== 'volc-ai-v11') {
-            caches.delete(k);
-          }
-        });
-      });
-    }
     navigator.serviceWorker.register('sw.js').then(reg => {
       // 检测到新 SW 就等它激活，然后刷新页面
       reg.addEventListener('updatefound', () => {
