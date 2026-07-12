@@ -930,6 +930,21 @@ function initUploadAreaGeneric(areaId, inputId, previewId, maxFiles, acceptType,
 }
 window.initUploadAreaGeneric = initUploadAreaGeneric;
 
+// ============ 链接有效期计算（24 小时） ============
+function getExpiryInfo(createdAt) {
+  if (!createdAt) return { expired: true, label: '已过期', color: '#888', remaining: 0 };
+  const created = new Date(createdAt).getTime();
+  const now = Date.now();
+  const remaining = Math.max(0, created + 24 * 3600 * 1000 - now);
+  const hours = Math.floor(remaining / 3600000);
+  const minutes = Math.floor((remaining % 3600000) / 60000);
+
+  if (remaining <= 0) return { expired: true, label: '已过期', color: '#888', remaining: 0 };
+  if (hours < 1) return { expired: false, label: '还剩' + minutes + '分钟', color: '#ff4d6d', remaining };
+  if (hours < 6) return { expired: false, label: '还剩' + hours + '小时' + (minutes > 0 ? minutes + '分钟' : ''), color: '#ffb443', remaining };
+  return { expired: false, label: '还剩' + hours + '小时', color: '#00d68f', remaining };
+}
+
 // ============ 历史记录 ============
 async function renderHistory() {
   const history = await Store.getHistory();
@@ -941,6 +956,9 @@ async function renderHistory() {
     card.className = 'history-card';
     const date = new Date(r.createdAt);
     const timeStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    // 链接有效期倒计时
+    const expiry = getExpiryInfo(r.createdAt);
+    const expiryHtml = '<span class="history-expiry" style="color:' + expiry.color + ';font-size:11px;">' + expiry.label + '</span>';
     // 改动 28: 视频缩略图用播放图标占位，不加载视频
     let thumb = r.type === 'image' && r.result?.[0] ? '<img src="' + escapeAttr(r.result[0]) + '" loading="lazy">' :
       r.type === 'video' ? '<div class="history-thumb-video"><svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div>' : '<div class="history-thumb-placeholder">无预览</div>';
@@ -950,7 +968,7 @@ async function renderHistory() {
     const statusLabel = r.status === 'pending' ? ' · 生成中' : r.status === 'failed' ? ' · 失败' : r.status === 'timeout' ? ' · 超时' : '';
     const statusColor = r.status === 'pending' || r.status === 'timeout' ? '#ffb443' : r.status === 'failed' ? '#ff4d6d' : '';
     const statusHtml = statusLabel ? '<span style="color:' + statusColor + ';">' + statusLabel + '</span>' : '';
-    card.innerHTML = '<div class="history-thumb" data-url="' + escapeAttr(url) + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + escapeHtml(r.mode || '') + statusHtml + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + '</div></div><div class="history-actions"><a class="btn-secondary download-btn" href="' + escapeAttr(url) + '" download data-id="' + r.id + '">' + downloadLabel + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
+    card.innerHTML = '<div class="history-thumb" data-url="' + escapeAttr(url) + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + escapeHtml(r.mode || '') + statusHtml + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + ' · ' + expiryHtml + '</div></div><div class="history-actions"><a class="btn-secondary download-btn" href="' + escapeAttr(url) + '" download data-id="' + r.id + '">' + downloadLabel + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
     // 整个卡片可点击打开详情
     card.style.cursor = 'pointer';
     card.onclick = (e) => {
@@ -996,9 +1014,13 @@ function showHistoryPreview(record) {
     lastFrameHtml = '<div style="margin-top:10px;"><div style="color:#a0a0b8;font-size:12px;margin-bottom:4px;">尾帧图</div><img src="' + escapeAttr(record.lastFrame) + '" style="max-width:100%;max-height:30vh;border-radius:8px;object-fit:contain;"></div>';
   }
 
-  // 改动 29: URL 过期提示
+  // 链接有效期倒计时
+  const expiryInfo = getExpiryInfo(record.createdAt);
   const expiryWarning = url
-    ? '<div style="color:#ffb443;font-size:12px;margin-top:8px;">⚠ 下载链接约 24 小时内有效，请及时保存</div>'
+    ? '<div style="color:' + expiryInfo.color + ';font-size:13px;margin-top:8px;display:flex;align-items:center;gap:6px;">' +
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
+        (expiryInfo.expired ? '链接已过期，无法下载' : '下载链接有效期: ' + expiryInfo.label) +
+      '</div>'
     : '';
 
   // 参数标签
