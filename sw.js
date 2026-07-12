@@ -12,10 +12,12 @@ const CACHE_FILES = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    // 先清掉所有旧缓存，再预缓存新文件
-    caches.keys().then(keys => Promise.all(
-      keys.map(k => caches.delete(k))
-    )).then(() => caches.open(CACHE_NAME)).then(cache => cache.addAll(CACHE_FILES)).catch(() => {})
+    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_FILES)).then(() => {
+      // 只删旧版本缓存，不删全部（避免误伤其他存储）
+      return caches.keys().then(keys => Promise.all(
+        keys.filter(k => k.startsWith('volc-ai-') && k !== CACHE_NAME).map(k => caches.delete(k))
+      ));
+    }).catch(err => console.warn('SW install failed, will retry:', err))
   );
   self.skipWaiting();
 });
@@ -23,7 +25,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then(keys => Promise.all(
-      keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+      keys.filter(k => k.startsWith('volc-ai-') && k !== CACHE_NAME).map(k => caches.delete(k))
     ))
   );
   self.clients.claim();
