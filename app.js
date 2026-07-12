@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.10';
+const APP_VERSION = '1.3.11';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -177,10 +177,11 @@ function initSettingsPage() {
 
   document.getElementById('btnTestConnection').onclick = async () => {
     const apiKey = document.getElementById('settingsApiKey').value.trim();
+    const apiDomain = document.getElementById('settingsApiDomain').value.trim() || ARK_BASE_URL;
     if (!apiKey) { showToast('请输入 API Key', 'error'); return; }
     showLoading('测试连接中...');
     try {
-      const result = await testConnection(apiKey, ARK_BASE_URL);
+      const result = await testConnection(apiKey, apiDomain);
       const info = document.getElementById('configInfo');
       info.className = 'config-info ' + (result.success ? 'success' : 'error');
       info.textContent = result.message;
