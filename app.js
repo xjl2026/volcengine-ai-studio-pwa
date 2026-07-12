@@ -2,7 +2,7 @@
 
 // 版本信息
 const APP_VERSION = '1.2.1';
-const APP_BUILD = '2026-07-12 12:15:00';
+const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
 let vidMode = 't2v'; // t2v / i2v
