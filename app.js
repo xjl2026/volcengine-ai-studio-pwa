@@ -52,13 +52,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       restorePendingVideoTask();
-      // 图片生成切后台断网恢复：如果有待重试的图片请求，自动重试
-      if (window._pendingImageParams && imgAbortController) {
-        // 请求可能因切后台被中断，用之前的参数重新发一次
-        const { params, prompt } = window._pendingImageParams;
-        imgAbortController.abort();
-        doImageGenerate(params, prompt, true);
-      }
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
         navigator.serviceWorker.getRegistration().then(reg => reg && reg.update());
       }
@@ -366,25 +359,21 @@ async function handleImageGenerate() {
   await doImageGenerate(params, prompt);
 }
 
-// 图片生成实际执行（支持重试）
+// 图片生成实际执行（支持重试，最多自动重试1次）
 async function doImageGenerate(params, prompt, isRetry) {
   const btn = document.getElementById('btnGenImage');
   btn.disabled = true; btn.textContent = '生成中...';
   imgAbortController = new AbortController();
-  // 保存当前请求参数，用于切后台恢复时重试
-  window._pendingImageParams = { params, prompt };
 
   // 行内进度展示
   const panel = document.getElementById('imgResultPanel');
-  panel.innerHTML = '<div class="task-status"><div class="spinner" style="width:40px;height:40px;border-width:3px;border-top-color:#3a8aff"></div><div class="status-text" style="color:#3a8aff">' + (isRetry ? '正在重新生成...' : '正在生成图片...') + '</div><button class="btn-secondary" id="btnCancelImage" style="margin-top:12px;">取消</button></div>';
+  panel.innerHTML = '<div class="task-status"><div class="spinner" style="width:40px;height:40px;border-width:3px;border-top-color:#3a8aff"></div><div class="status-text" style="color:#3a8aff">' + (isRetry ? '正在重新生成...' : '正在生成图片...') + '</div><div style="font-size:12px;color:#6b6b85;margin-top:4px;">切后台不会中断，请耐心等待</div><button class="btn-secondary" id="btnCancelImage" style="margin-top:12px;">取消</button></div>';
   document.getElementById('btnCancelImage').onclick = () => {
     if (imgAbortController) imgAbortController.abort();
-    window._pendingImageParams = null;
   };
 
   try {
     const result = await generateImage({ ...params, signal: imgAbortController.signal });
-    window._pendingImageParams = null;
     if (result.success && result.data) {
       const images = (result.data.data || []).map(i => i.url).filter(Boolean);
       if (images.length > 0) {
@@ -395,18 +384,26 @@ async function doImageGenerate(params, prompt, isRetry) {
         window._historyRendered = false;
       } else { panel.innerHTML = '<div class="result-placeholder"><p>未返回图片数据</p></div>'; showToast('未返回图片数据', 'warning'); }
     } else {
-      // 请求失败，显示重试按钮
+      // 请求失败：首次失败自动重试一次，重试失败显示按钮
+      if (!isRetry) {
+        showToast('请求失败，自动重试中...', 'warning');
+        return await doImageGenerate(params, prompt, true);
+      }
       panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">生成失败</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">' + escapeHtml(result.error || '') + '</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
       document.getElementById('btnRetryImage').onclick = () => doImageGenerate(params, prompt, true);
       showToast('失败: ' + (result.error || ''), 'error');
     }
   } catch (e) {
-    window._pendingImageParams = null;
-    if (e.name === 'AbortError' || e.message === '用户取消' || e.message === '请求超时（600秒），请检查网络后重试') {
+    const isUserCancel = e.name === 'AbortError' || e.message === '用户取消';
+    if (isUserCancel) {
       panel.innerHTML = '<div class="result-placeholder"><p>已取消</p></div>';
       showToast('已取消', 'info');
     } else {
-      // 网络中断等异常，显示重试按钮
+      // 网络中断等异常：首次异常自动重试一次，重试失败显示按钮
+      if (!isRetry) {
+        showToast('网络异常，自动重试中...', 'warning');
+        return await doImageGenerate(params, prompt, true);
+      }
       panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">网络异常</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">' + escapeHtml(e.message) + '</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
       document.getElementById('btnRetryImage').onclick = () => doImageGenerate(params, prompt, true);
       showToast('错误: ' + e.message, 'error');
