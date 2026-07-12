@@ -30,9 +30,11 @@ jobs:
           echo "Build: $BUILD_TIME | Cache: $CACHE_VER"
           sed -i "s|APP_BUILD = '[^']*'|APP_BUILD = '$BUILD_TIME'|g" app.js
           sed -i "s|CACHE_NAME = '[^']*'|CACHE_NAME = '$CACHE_VER'|g" sw.js
-          # 同时注入版本号和构建时间到 HTML，不依赖 JS
-          sed -i "s|<span id=\"versionText\">[^<]*</span>|<span id=\"versionText\">v$(grep -oP \"APP_VERSION = '\\K[^']*\" app.js)</span>|g" index.html
+          # 注入版本号和构建时间到 HTML（部署时直接写入，不依赖 JS）
+          APP_VER=$(grep "APP_VERSION" app.js | head -1 | sed "s/.*'\(.*\)'.*/\\1/")
+          sed -i "s|<span id=\"versionText\">[^<]*</span>|<span id=\"versionText\">v$APP_VER</span>|g" index.html
           sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
+          echo "Version: v$APP_VER"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
