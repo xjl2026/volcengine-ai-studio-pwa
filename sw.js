@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存
-const CACHE_NAME = 'volc-ai-v16';
+const CACHE_NAME = 'volc-ai-v17';
 const CACHE_FILES = [
   './',
   './index.html',
