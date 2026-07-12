@@ -15,15 +15,15 @@ const IMAGE_MODELS = [
 
 const VIDEO_MODELS = [
   { id: 'doubao-seedance-2-0-260128', name: 'Seedance 2.0', resolutions: ['480p', '720p', '1080p', '4k'], durationRange: [4, 15],
-    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9 } },
+    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, referenceAudio: true, maxRefAudios: 3, webSearch: true, priority: true } },
   { id: 'doubao-seedance-2-0-fast-260128', name: 'Seedance 2.0 Fast', resolutions: ['480p', '720p'], durationRange: [4, 15],
-    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9 } },
+    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, referenceAudio: true, maxRefAudios: 3, webSearch: true, priority: true } },
   { id: 'doubao-seedance-1-5-pro-251215', name: 'Seedance 1.5 Pro', resolutions: ['480p', '720p', '1080p'], durationRange: [4, 12],
-    caps: { generateAudio: true, seed: true, cameraFixed: true, frames: false, draft: true, serviceTier: false, adaptiveRatio: true, maxDuration: 12, referenceImage: false, maxRefImages: 0 } },
+    caps: { generateAudio: true, seed: true, cameraFixed: true, frames: false, draft: true, serviceTier: false, adaptiveRatio: true, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } },
   { id: 'doubao-seedance-1-0-pro-250528', name: 'Seedance 1.0 Pro', resolutions: ['480p', '720p', '1080p'], durationRange: [2, 12],
-    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0 } },
+    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } },
   { id: 'doubao-seedance-1-0-pro-fast-251015', name: 'Seedance 1.0 Pro Fast', resolutions: ['480p', '720p', '1080p'], durationRange: [2, 12],
-    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0 } }
+    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } }
 ];
 
 // ============ 配置存储（用 localStorage） ============
@@ -34,9 +34,25 @@ const Store = {
   },
   async saveConfig(config) { localStorage.setItem('volc_config', JSON.stringify(config)); return true; },
   async getHistory() { try { return JSON.parse(localStorage.getItem('volc_history')) || []; } catch { return []; } },
-  async saveHistory(h) { localStorage.setItem('volc_history', JSON.stringify(h)); return true; },
+  async saveHistory(h) {
+    try {
+      localStorage.setItem('volc_history', JSON.stringify(h));
+    } catch (e) {
+      if (e.name === 'QuotaExceededError') {
+        // 淘汰最旧的一半记录重试
+        h = h.slice(0, Math.floor(h.length / 2));
+        try { localStorage.setItem('volc_history', JSON.stringify(h)); } catch {}
+      }
+    }
+    return true;
+  },
   async addHistory(record) {
     const history = await this.getHistory();
+    // taskId 去重：同一个视频任务只写一次
+    if (record.taskId) {
+      const exists = history.find(h => h.taskId === record.taskId);
+      if (exists) return exists;
+    }
     const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), createdAt: new Date().toISOString(), ...record };
     history.unshift(r);
     if (history.length > 500) history.length = 500;
@@ -46,6 +62,20 @@ const Store = {
       try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); }
     }
     return r;
+  },
+  async updateHistory(id, patch) {
+    const history = await this.getHistory();
+    const idx = history.findIndex(h => h.id === id);
+    if (idx >= 0) {
+      Object.assign(history[idx], patch);
+      await this.saveHistory(history);
+      // 同步到云端
+      if (window.SyncManager && SyncManager.isEnabled() && history[idx]._syncId) {
+        try { await SyncManager.pushHistory(history[idx]); } catch (e) { console.warn('更新同步失败: ', e); }
+      }
+      return history[idx];
+    }
+    return null;
   },
   async removeHistory(id) {
     const history = await this.getHistory();
@@ -87,7 +117,12 @@ async function arkRequest(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + config.apiKey, ...options.headers };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 60000);
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 180000);
+  // 支持外部 AbortController（用于用户手动取消）
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
 
   try {
     const res = await fetch(url, {
@@ -102,7 +137,11 @@ async function arkRequest(path, options = {}) {
     return { status: res.status, data };
   } catch (e) {
     clearTimeout(timeoutId);
-    if (e.name === 'AbortError') throw new Error('请求超时（60秒），请检查网络后重试');
+    if (e.name === 'AbortError') {
+      // 区分是外部取消还是超时
+      if (options.signal && options.signal.aborted) throw new Error('用户取消');
+      throw new Error('请求超时（180秒），请检查网络后重试');
+    }
     throw e;
   }
 }
@@ -138,14 +177,14 @@ function buildImageRequestBody(params) {
 
 async function generateImage(params) {
   const requestBody = buildImageRequestBody(params);
-  const result = await arkRequest('/api/v3/images/generations', { method: 'POST', body: requestBody });
+  const result = await arkRequest('/api/v3/images/generations', { method: 'POST', body: requestBody, signal: params.signal, timeout: 180000 });
   if (result.status >= 200 && result.status < 300) return { success: true, data: result.data };
   return { success: false, error: result.data?.error?.message || 'HTTP ' + result.status };
 }
 
 // ============ 视频生成 ============
 function buildVideoRequestBody(params) {
-  const { mode, model, prompt, firstFrameImages, tailFrameImages, refImages, resolution, ratio, duration, seed, generateAudio, watermark, returnLastFrame, cameraFixed, frames, draft, serviceTier, caps } = params;
+  const { mode, model, prompt, firstFrameImages, tailFrameImages, refImages, refVideos, refAudios, resolution, ratio, duration, seed, generateAudio, watermark, returnLastFrame, cameraFixed, frames, draft, serviceTier, webSearch, priority, caps } = params;
   const body = { model, content: [] };
 
   if (prompt) body.content.push({ type: 'text', text: prompt });
@@ -158,9 +197,17 @@ function buildVideoRequestBody(params) {
   if (tailFrameImages && tailFrameImages.length > 0) {
     tailFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'last_frame' }));
   }
-  // 参考图（role: reference_image，仅 2.0 系列支持）
+  // 参考图（role: reference_image，仅 2.0 系列）
   if (refImages && refImages.length > 0) {
     refImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' }));
+  }
+  // 参考视频（role: reference_video，仅 2.0 系列）
+  if (refVideos && refVideos.length > 0) {
+    refVideos.forEach(url => body.content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' }));
+  }
+  // 参考音频（role: reference_audio，仅 2.0 系列）
+  if (refAudios && refAudios.length > 0) {
+    refAudios.forEach(url => body.content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' }));
   }
   if (resolution) body.resolution = resolution;
   if (ratio) body.ratio = ratio;
@@ -176,6 +223,10 @@ function buildVideoRequestBody(params) {
   if (caps && caps.seed && seed !== undefined && seed !== '' && seed !== -1) body.seed = parseInt(seed);
   if (caps && caps.draft && draft) body.draft = true;
   if (caps && caps.serviceTier && serviceTier && serviceTier !== 'default') body.service_tier = serviceTier;
+  // 联网搜索（仅 2.0 系列）
+  if (caps && caps.webSearch && webSearch) body.tools = [{ type: 'web_search' }];
+  // 排队优先级（仅 2.0 系列）
+  if (caps && caps.priority && priority !== undefined && priority !== 0) body.priority = parseInt(priority);
   return body;
 }
 
@@ -202,6 +253,13 @@ async function pollVideoTask(taskId, onProgress, interval, maxAttempts) {
     const result = await queryVideoTask(taskId);
     if (!result.success) {
       consecutiveErrors++;
+      // 断网时降低查询频率，不消耗 attempt
+      if (!navigator.onLine) {
+        if (onProgress) onProgress({ status: 'queued', data: null, attempt: i });
+        await new Promise(r => setTimeout(r, interval * 4));
+        i--; // 断网不消耗 attempt
+        continue;
+      }
       if (onProgress) onProgress({ status: 'queued', data: null, attempt: i + 1 });
       if (consecutiveErrors >= maxConsecutiveErrors) {
         return { success: false, error: '连续' + maxConsecutiveErrors + '次查询失败: ' + result.error, taskId };

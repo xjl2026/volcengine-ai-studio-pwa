@@ -6,10 +6,18 @@ let imgRefImages = [];
 let vidFirstImage = [];
 let vidTailImage = [];
 let vidRefImages = [];
+let vidRefVideos = [];
+let vidRefAudios = [];
 let imgUploadCtrl = null;
 let vidFirstUploadCtrl = null;
 let vidTailUploadCtrl = null;
 let vidRefUploadCtrl = null;
+let vidRefVideoUploadCtrl = null;
+let vidRefAudioUploadCtrl = null;
+let imgAbortController = null;
+// 视频轮询并发控制
+window._currentPollingTaskId = null;
+window._restoringTask = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
   initNav();
@@ -21,6 +29,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await updateApiStatus();
   // 初始化同步
   await initSync();
+  // 恢复未完成的视频任务（页面重新加载时）
+  restorePendingVideoTask();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').then(reg => {
       // 检测到新 SW 就等它激活，然后刷新页面
@@ -96,6 +106,29 @@ function escapeHtml(text) {
   const d = document.createElement('div');
   d.textContent = text;
   return d.innerHTML;
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
 }
 
 // ============ 设置页 ============
@@ -325,11 +358,17 @@ async function handleImageGenerate() {
 
   const btn = document.getElementById('btnGenImage');
   btn.disabled = true; btn.textContent = '生成中...';
-  showLoading('正在生成图片...');
+  imgAbortController = new AbortController();
+
+  // 行内进度展示
+  const panel = document.getElementById('imgResultPanel');
+  panel.innerHTML = '<div class="task-status"><div class="spinner" style="width:40px;height:40px;border-width:3px;border-top-color:#3a8aff"></div><div class="status-text" style="color:#3a8aff">正在生成图片...</div><button class="btn-secondary" id="btnCancelImage" style="margin-top:12px;">取消</button></div>';
+  document.getElementById('btnCancelImage').onclick = () => {
+    if (imgAbortController) imgAbortController.abort();
+  };
 
   try {
-    const result = await generateImage(params);
-    hideLoading();
+    const result = await generateImage({ ...params, signal: imgAbortController.signal });
     if (result.success && result.data) {
       const images = (result.data.data || []).map(i => i.url).filter(Boolean);
       if (images.length > 0) {
@@ -337,11 +376,19 @@ async function handleImageGenerate() {
         showToast('生成成功！', 'success');
         notifyTaskComplete('image', prompt);
         await Store.addHistory({ type: 'image', mode: getImgModeLabel(imgMode), prompt, params: { model, size: params.size }, result: images });
-        window._historyRendered = false; // 有新记录，标记需要重新渲染
-      } else { showToast('未返回图片数据', 'warning'); }
-    } else { showToast('失败: ' + (result.error || ''), 'error'); }
-  } catch (e) { hideLoading(); showToast('错误: ' + e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = '生成图片'; }
+        window._historyRendered = false;
+      } else { panel.innerHTML = '<div class="result-placeholder"><p>未返回图片数据</p></div>'; showToast('未返回图片数据', 'warning'); }
+    } else { panel.innerHTML = '<div class="result-placeholder"><p>生成失败</p></div>'; showToast('失败: ' + (result.error || ''), 'error'); }
+  } catch (e) {
+    if (e.name === 'AbortError' || e.message === '用户取消') {
+      panel.innerHTML = '<div class="result-placeholder"><p>已取消</p></div>';
+      showToast('已取消', 'info');
+    } else {
+      panel.innerHTML = '<div class="result-placeholder"><p>错误: ' + escapeHtml(e.message) + '</p></div>';
+      showToast('错误: ' + e.message, 'error');
+    }
+  }
+  finally { btn.disabled = false; btn.textContent = '生成图片'; imgAbortController = null; }
 }
 
 function getImgModeLabel(m) { return { t2i: '文生图', i2i: '图生图', fusion: '多图融合', sequential: '组图' }[m] || m; }
@@ -353,10 +400,10 @@ function renderImageResults(images) {
   images.forEach((url, idx) => {
     const item = document.createElement('div');
     item.className = 'result-item';
-    item.innerHTML = '<img src="' + url + '"><div class="result-meta">图片 ' + (idx+1) + ' / ' + images.length + '</div><div class="result-actions"><a class="btn-secondary" href="' + url + '" download>下载</a><button class="btn-secondary copy-btn" data-url="' + url + '">复制链接</button></div>';
+    item.innerHTML = '<img src="' + escapeAttr(url) + '"><div class="result-meta">图片 ' + (idx+1) + ' / ' + images.length + '</div><div class="result-actions"><a class="btn-secondary" href="' + escapeAttr(url) + '" download>下载</a><button class="btn-secondary copy-btn" data-url="' + escapeAttr(url) + '">复制链接</button></div>';
     content.appendChild(item);
     item.querySelector('img').onclick = () => window.open(url);
-    item.querySelector('.copy-btn').onclick = () => { navigator.clipboard.writeText(url); showToast('已复制', 'success'); };
+    item.querySelector('.copy-btn').onclick = async () => { const ok = await copyToClipboard(url); showToast(ok ? '已复制' : '复制失败', ok ? 'success' : 'error'); };
   });
 }
 
@@ -379,8 +426,22 @@ function initVideoPage() {
   vidFirstUploadCtrl = initUploadArea('vidFirstUpload', 'vidFirstInput', 'vidFirstPreview', 1, imgs => vidFirstImage = imgs);
   vidTailUploadCtrl = initUploadArea('vidTailUpload', 'vidTailInput', 'vidTailPreview', 1, imgs => vidTailImage = imgs);
   vidRefUploadCtrl = initUploadArea('vidRefUpload', 'vidRefInput', 'vidRefPreview', 9, imgs => vidRefImages = imgs);
+  // 参考视频/音频上传（仅 2.0 系列）
+  vidRefVideoUploadCtrl = initUploadAreaGeneric('vidRefVideoUpload', 'vidRefVideoInput', 'vidRefVideoPreview', 3, 'video', urls => vidRefVideos = urls);
+  vidRefAudioUploadCtrl = initUploadAreaGeneric('vidRefAudioUpload', 'vidRefAudioInput', 'vidRefAudioPreview', 3, 'audio', urls => vidRefAudios = urls);
   updateVideoModelUI(); updateVideoModeUI();
   document.getElementById('btnGenVideo').onclick = handleVideoGenerate;
+
+  // 样片模式开启时隐藏"返回尾帧"（改动 21）
+  document.getElementById('vidDraft').onchange = function() {
+    const returnFrameGroup = document.getElementById('vidReturnLastFrameGroup');
+    if (this.checked) {
+      returnFrameGroup.style.display = 'none';
+      document.getElementById('vidReturnLastFrame').checked = false;
+    } else {
+      returnFrameGroup.style.display = 'block';
+    }
+  };
 
   // 清空提示词
   document.getElementById('btnClearVidPrompt').onclick = () => { document.getElementById('vidPrompt').value = ''; };
@@ -406,21 +467,42 @@ function updateVideoModelUI() {
 
   const dur = document.getElementById('vidDuration');
   dur.min = mi.durationRange[0]; dur.max = mi.durationRange[1];
-  if (parseInt(dur.value) > mi.durationRange[1] || parseInt(dur.value) < mi.durationRange[0]) dur.value = 5;
+  // 改动 11: -1 智能时长不被强制改回 5
+  const dv = parseInt(dur.value);
+  if (dv !== -1 && (dv > mi.durationRange[1] || dv < mi.durationRange[0])) dur.value = 5;
 
   document.getElementById('vidAudioGroup').style.display = caps.generateAudio ? 'block' : 'none';
+  // 改动 22: 音频 checkbox 在隐藏时重置
+  if (!caps.generateAudio) document.getElementById('vidGenerateAudio').checked = false;
   document.getElementById('vidSeedGroup').style.display = caps.seed ? 'block' : 'none';
   document.getElementById('vidFramesGroup').style.display = caps.frames ? 'block' : 'none';
   document.getElementById('vidDraftGroup').style.display = caps.draft ? 'block' : 'none';
   document.getElementById('vidServiceTierGroup').style.display = caps.serviceTier ? 'block' : 'none';
+  // 新增 caps 显隐
+  document.getElementById('vidWebSearchGroup').style.display = caps.webSearch ? 'block' : 'none';
+  document.getElementById('vidPriorityGroup').style.display = caps.priority ? 'block' : 'none';
   updateCameraFixedVisibility(caps);
 
   // 图生视频模式下，参考图区域按模型能力显示
   const refGroup = document.getElementById('vidRefImageGroup');
+  const refVideoGroup = document.getElementById('vidRefVideoGroup');
+  const refAudioGroup = document.getElementById('vidRefAudioGroup');
   if (vidMode === 'i2v' && caps.referenceImage) {
     refGroup.style.display = 'block';
   } else {
     refGroup.style.display = 'none';
+  }
+  if (vidMode === 'i2v' && caps.referenceVideo) {
+    refVideoGroup.style.display = 'block';
+  } else {
+    refVideoGroup.style.display = 'none';
+    if (vidRefVideoUploadCtrl) vidRefVideoUploadCtrl.clear();
+  }
+  if (vidMode === 'i2v' && caps.referenceAudio) {
+    refAudioGroup.style.display = 'block';
+  } else {
+    refAudioGroup.style.display = 'none';
+    if (vidRefAudioUploadCtrl) vidRefAudioUploadCtrl.clear();
   }
 }
 
@@ -436,18 +518,41 @@ function updateVideoModeUI() {
 
   if (vidMode === 'i2v') {
     ff.style.display = 'block';
-    tf.style.display = 'block';
     const model = document.getElementById('vidModel').value;
     const mi = VIDEO_MODELS.find(m => m.id === model);
+    // 改动 13: 1.0 Pro Fast 不支持尾帧
+    const supportsTail = mi && mi.id !== 'doubao-seedance-1-0-pro-fast-251015';
+    tf.style.display = supportsTail ? 'block' : 'none';
+    if (!supportsTail && vidTailUploadCtrl) vidTailUploadCtrl.clear();
     if (mi && mi.caps.referenceImage) rf.style.display = 'block';
   } else {
     if (vidFirstUploadCtrl) vidFirstUploadCtrl.clear();
     if (vidTailUploadCtrl) vidTailUploadCtrl.clear();
     if (vidRefUploadCtrl) vidRefUploadCtrl.clear();
+    if (vidRefVideoUploadCtrl) vidRefVideoUploadCtrl.clear();
+    if (vidRefAudioUploadCtrl) vidRefAudioUploadCtrl.clear();
   }
   const model = document.getElementById('vidModel').value;
   const mi = VIDEO_MODELS.find(m => m.id === model);
   if (mi) updateCameraFixedVisibility(mi.caps);
+}
+
+// 表单整体 disable（改动 23）
+function setVideoFormDisabled(disabled) {
+  ['vidModel', 'vidResolution', 'vidRatio', 'vidDuration', 'vidSeed', 'vidFrames',
+   'vidServiceTier', 'vidPriority'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
+  ['vidGenerateAudio', 'vidWatermark', 'vidReturnLastFrame', 'vidCameraFixed',
+   'vidDraft', 'vidWebSearch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  });
+  document.querySelectorAll('.mode-tab[data-vid-mode]').forEach(t => {
+    t.style.pointerEvents = disabled ? 'none' : '';
+    t.style.opacity = disabled ? '0.5' : '';
+  });
 }
 
 async function handleVideoGenerate() {
@@ -462,15 +567,19 @@ async function handleVideoGenerate() {
   if (!mi) return;
   const caps = mi.caps;
 
+  // 改动 12: seed=0 不被当作未设置
+  const seedRaw = document.getElementById('vidSeed').value.trim();
   const params = {
     mode: vidMode, model, prompt,
     firstFrameImages: vidMode === 'i2v' && vidFirstImage.length > 0 ? vidFirstImage : undefined,
     tailFrameImages: vidMode === 'i2v' && vidTailImage.length > 0 ? vidTailImage : undefined,
     refImages: vidMode === 'i2v' && vidRefImages.length > 0 ? vidRefImages : undefined,
+    refVideos: vidMode === 'i2v' && vidRefVideos.length > 0 ? vidRefVideos : undefined,
+    refAudios: vidMode === 'i2v' && vidRefAudios.length > 0 ? vidRefAudios : undefined,
     resolution: document.getElementById('vidResolution').value,
     ratio: document.getElementById('vidRatio').value,
     duration: document.getElementById('vidDuration').value,
-    seed: parseInt(document.getElementById('vidSeed').value) || -1,
+    seed: seedRaw === '' ? -1 : parseInt(seedRaw),
     generateAudio: document.getElementById('vidGenerateAudio').checked,
     watermark: document.getElementById('vidWatermark').checked,
     returnLastFrame: document.getElementById('vidReturnLastFrame').checked,
@@ -478,12 +587,18 @@ async function handleVideoGenerate() {
     frames: document.getElementById('vidFrames') ? document.getElementById('vidFrames').value : '',
     draft: document.getElementById('vidDraft') ? document.getElementById('vidDraft').checked : false,
     serviceTier: document.getElementById('vidServiceTier') ? document.getElementById('vidServiceTier').value : 'default',
+    webSearch: document.getElementById('vidWebSearch') ? document.getElementById('vidWebSearch').checked : false,
+    priority: document.getElementById('vidPriority') ? parseInt(document.getElementById('vidPriority').value) || 0 : 0,
     caps
   };
 
   const btn = document.getElementById('btnGenVideo');
   btn.disabled = true; btn.textContent = '提交中...';
+  setVideoFormDisabled(true);
   renderVideoTaskStatus('queued', '任务提交中...', 0);
+
+  // 历史记录参数（复用于 pending 记录和成功后更新）
+  const historyParams = { model, resolution: params.resolution, ratio: params.ratio, duration: params.duration, seed: params.seed, audio: params.generateAudio, watermark: params.watermark };
 
   try {
     const submitResult = await submitVideoTask(params);
@@ -492,18 +607,29 @@ async function handleVideoGenerate() {
     const taskId = submitResult.data?.id;
     if (!taskId) { renderVideoTaskStatus('failed', '未获取到任务ID', 0); return; }
 
-    // 保存任务到 localStorage，防止切后台丢失
-    savePendingVideoTask(taskId, vidMode);
+    // 改动 6: 提交成功后立即写 pending 历史记录
+    const pendingRecord = await Store.addHistory({
+      type: 'video', mode: getVidModeLabel(vidMode), prompt, params: historyParams,
+      result: [], taskId, status: 'pending'
+    });
+    window._historyRendered = false;
+
+    // 改动 7: 保存更多参数到 localStorage
+    savePendingVideoTask(taskId, vidMode, prompt, pendingRecord.id, historyParams);
 
     showToast('任务已提交，生成中...', 'success');
     btn.textContent = '生成中...';
     renderVideoTaskStatus('running', '视频生成中... 预计 1-3 分钟', 5, 0);
 
+    // 改动 3: 并发控制
+    window._currentPollingTaskId = taskId;
     const pollResult = await pollVideoTask(taskId, progress => {
+      if (window._currentPollingTaskId !== taskId) return; // 被恢复逻辑接管，退出
       const labels = { queued: '排队中...', running: '生成中...', succeeded: '完成', failed: '失败' };
       const percent = Math.min((progress.attempt / 60) * 100, 90);
       renderVideoTaskStatus(progress.status, labels[progress.status] || progress.status, percent, progress.attempt);
     }, 5000, 240);
+    window._currentPollingTaskId = null;
 
     if (pollResult.success) {
       const videoUrl = pollResult.data?.content?.video_url;
@@ -512,23 +638,28 @@ async function handleVideoGenerate() {
         renderVideoResult(videoUrl, lastFrameUrl);
         showToast('生成成功！', 'success');
         notifyTaskComplete('video', prompt);
-        await Store.addHistory({ type: 'video', mode: getVidModeLabel(vidMode), prompt, params: { model, resolution: params.resolution, ratio: params.ratio, duration: params.duration, seed: params.seed, audio: params.generateAudio, watermark: params.watermark }, result: [videoUrl], thumbnail: videoUrl });
+        // 改动 6/14: 更新历史记录（含尾帧图）
+        await Store.updateHistory(pendingRecord.id, {
+          result: [videoUrl], lastFrame: lastFrameUrl || null,
+          thumbnail: videoUrl, status: 'succeeded'
+        });
         window._historyRendered = false;
       } else { renderVideoTaskStatus('succeeded', '完成但未找到视频URL', 100); }
       clearPendingVideoTask();
     } else if (pollResult.timeout && pollResult.taskId) {
-      renderVideoTimeout(pollResult.taskId);
+      renderVideoTimeout(pollResult.taskId, pendingRecord.id);
       showToast('轮询超时，可重试查询', 'warning');
-      // 保留 pending task
+      await Store.updateHistory(pendingRecord.id, { status: 'timeout' });
     } else {
       renderVideoTaskStatus('failed', pollResult.error || '失败', 0);
       showToast('生成失败', 'error');
+      await Store.updateHistory(pendingRecord.id, { status: 'failed' });
       clearPendingVideoTask();
     }
   } catch (e) {
     renderVideoTaskStatus('failed', e.message, 0);
     showToast('错误: ' + e.message, 'error');
-  } finally { btn.disabled = false; btn.textContent = '生成视频'; }
+  } finally { btn.disabled = false; btn.textContent = '生成视频'; setVideoFormDisabled(false); }
 }
 
 function getVidModeLabel(m) { return { 't2v': '文生视频', 'i2v': '图生视频' }[m] || m; }
@@ -547,14 +678,14 @@ function renderVideoTaskStatus(status, text, percent, attempt) {
 
 function renderVideoResult(url, lastFrameUrl) {
   const panel = document.getElementById('vidResultPanel');
-  let html = '<div class="result-content"><div class="result-item"><video src="' + url + '" controls autoplay loop></video><div class="result-actions"><a class="btn-secondary" href="' + url + '" download>下载视频</a><button class="btn-secondary copy-btn" data-url="' + url + '">复制链接</button></div></div>';
-  if (lastFrameUrl) html += '<div class="last-frame-preview"><div class="last-frame-label">尾帧图</div><img src="' + lastFrameUrl + '"></div>';
+  let html = '<div class="result-content"><div class="result-item"><video src="' + escapeAttr(url) + '" controls loop playsinline></video><div class="result-actions"><a class="btn-secondary" href="' + escapeAttr(url) + '" download>下载视频</a><button class="btn-secondary copy-btn" data-url="' + escapeAttr(url) + '">复制链接</button></div></div>';
+  if (lastFrameUrl) html += '<div class="last-frame-preview"><div class="last-frame-label">尾帧图</div><img src="' + escapeAttr(lastFrameUrl) + '"></div>';
   html += '</div>';
   panel.innerHTML = html;
-  panel.querySelector('.copy-btn').onclick = () => { navigator.clipboard.writeText(url); showToast('已复制', 'success'); };
+  panel.querySelector('.copy-btn').onclick = async () => { const ok = await copyToClipboard(url); showToast(ok ? '已复制' : '复制失败', ok ? 'success' : 'error'); };
 }
 
-function renderVideoTimeout(taskId) {
+function renderVideoTimeout(taskId, recordId) {
   const panel = document.getElementById('vidResultPanel');
   panel.innerHTML = '<div class="task-status"><div class="status-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ffb443" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="6" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div><div class="status-text" style="color:#ffb443">轮询超时</div><div class="status-detail">任务ID: ' + taskId + '<br>任务可能仍在生成中</div><button class="btn-primary" id="btnRetryQuery" style="margin-top:12px;">重新查询</button></div>';
   document.getElementById('btnRetryQuery').onclick = async () => {
@@ -570,19 +701,28 @@ function renderVideoTimeout(taskId) {
       if (result.success) {
         const url = result.data?.content?.video_url;
         const lf = result.data?.content?.last_frame_url;
-        if (url) { renderVideoResult(url, lf); showToast('生成成功！', 'success'); await Store.addHistory({ type: 'video', mode: '视频', params: {}, result: [url], thumbnail: url }); }
-        else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
+        if (url) {
+          renderVideoResult(url, lf);
+          showToast('生成成功！', 'success');
+          // 用 updateHistory 更新已有记录，避免重复
+          if (recordId) {
+            await Store.updateHistory(recordId, { result: [url], lastFrame: lf || null, thumbnail: url, status: 'succeeded' });
+          } else {
+            await Store.addHistory({ type: 'video', mode: '视频', params: {}, result: [url], thumbnail: url, taskId, status: 'succeeded' });
+          }
+          window._historyRendered = false;
+        } else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
         clearPendingVideoTask();
-      } else if (result.timeout && result.taskId) { renderVideoTimeout(result.taskId); showToast('仍未完成', 'warning'); }
+      } else if (result.timeout && result.taskId) { renderVideoTimeout(result.taskId, recordId); showToast('仍未完成', 'warning'); }
       else { renderVideoTaskStatus('failed', result.error || '失败', 0); clearPendingVideoTask(); }
     } catch (e) { renderVideoTaskStatus('failed', e.message, 0); }
   };
 }
 
 // ============ 待处理任务恢复 ============
-function savePendingVideoTask(taskId, vidModeSnapshot) {
+function savePendingVideoTask(taskId, vidModeSnapshot, prompt, recordId, params) {
   localStorage.setItem('volc_pending_task', JSON.stringify({
-    taskId, vidMode: vidModeSnapshot, savedAt: Date.now()
+    taskId, vidMode: vidModeSnapshot, prompt, recordId, params, savedAt: Date.now()
   }));
 }
 
@@ -591,8 +731,11 @@ function clearPendingVideoTask() {
 }
 
 async function restorePendingVideoTask() {
+  // 改动 3: 重入锁
+  if (window._restoringTask) return;
   const raw = localStorage.getItem('volc_pending_task');
   if (!raw) return;
+
   let taskInfo;
   try { taskInfo = JSON.parse(raw); } catch { clearPendingVideoTask(); return; }
 
@@ -602,17 +745,28 @@ async function restorePendingVideoTask() {
     return;
   }
 
+  // 如果当前已有该任务的轮询在跑，不重复恢复
+  if (window._currentPollingTaskId === taskInfo.taskId) return;
+
+  window._restoringTask = true;
+  window._currentPollingTaskId = taskInfo.taskId;
+
   // 切到视频页，显示恢复中的状态
   switchPage('video');
   const btn = document.getElementById('btnGenVideo');
   btn.disabled = true; btn.textContent = '恢复任务中...';
-  renderVideoTaskStatus('running', '正在恢复查询任务...', 10, 0);
+  setVideoFormDisabled(true);
+  // 改动 10: 进度不从 0 开始，根据 savedAt 计算已过时间
+  const elapsed = Math.floor((Date.now() - taskInfo.savedAt) / 5000);
+  renderVideoTaskStatus('running', '正在恢复查询任务...', Math.min(elapsed, 10), elapsed);
 
   try {
     const result = await pollVideoTask(taskInfo.taskId, p => {
+      if (window._currentPollingTaskId !== taskInfo.taskId) return; // 被其他轮询接管
       const labels = { queued: '排队中...', running: '生成中...', succeeded: '完成', failed: '失败' };
-      const percent = Math.min((p.attempt / 60) * 100, 90);
-      renderVideoTaskStatus(p.status, labels[p.status] || p.status, percent, p.attempt);
+      const totalAttempt = p.attempt + elapsed;
+      const percent = Math.min((totalAttempt / 60) * 100, 90);
+      renderVideoTaskStatus(p.status, labels[p.status] || p.status, percent, totalAttempt);
     }, 5000, 240);
 
     if (result.success) {
@@ -621,22 +775,42 @@ async function restorePendingVideoTask() {
       if (url) {
         renderVideoResult(url, lf);
         showToast('视频生成成功！', 'success');
-        await Store.addHistory({ type: 'video', mode: getVidModeLabel(taskInfo.vidMode || 'i2v'), params: {}, result: [url], thumbnail: url });
+        notifyTaskComplete('video', taskInfo.prompt || '');
+        // 改动 8: 用存下来的 recordId 更新，而不是新增
+        if (taskInfo.recordId) {
+          await Store.updateHistory(taskInfo.recordId, {
+            result: [url], lastFrame: lf || null, thumbnail: url, status: 'succeeded'
+          });
+        } else {
+          // 兜底：没有 recordId 时才新增
+          await Store.addHistory({
+            type: 'video', mode: getVidModeLabel(taskInfo.vidMode || 'i2v'),
+            prompt: taskInfo.prompt || '', params: taskInfo.params || {},
+            result: [url], lastFrame: lf || null, thumbnail: url,
+            taskId: taskInfo.taskId, status: 'succeeded'
+          });
+        }
+        window._historyRendered = false;
       } else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
       clearPendingVideoTask();
     } else if (result.timeout && result.taskId) {
-      renderVideoTimeout(result.taskId);
+      renderVideoTimeout(result.taskId, taskInfo.recordId);
       showToast('任务仍在生成中，可稍后重试', 'warning');
       // 保留 pending task，下次切回来还能恢复
     } else {
       renderVideoTaskStatus('failed', result.error || '失败', 0);
+      // 更新历史记录状态为失败
+      if (taskInfo.recordId) await Store.updateHistory(taskInfo.recordId, { status: 'failed' });
       clearPendingVideoTask();
     }
   } catch (e) {
     renderVideoTaskStatus('failed', e.message, 0);
     clearPendingVideoTask();
   } finally {
+    window._restoringTask = false;
+    window._currentPollingTaskId = null;
     btn.disabled = false; btn.textContent = '生成视频';
+    setVideoFormDisabled(false);
   }
 }
 function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
@@ -648,7 +822,12 @@ function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
   area.onclick = () => input.click();
   input.onchange = async (e) => {
     for (let file of e.target.files) {
-      if (files.length >= maxFiles) { showToast('最多' + maxFiles + '张', 'warning'); break; }
+      if (files.length >= maxFiles) {
+        // 改动 36: 更准确的提示
+        const remaining = maxFiles - files.length;
+        showToast(remaining > 0 ? '还能添加' + remaining + '张' : '已达到上限' + maxFiles + '张', 'warning');
+        break;
+      }
       if (!file.type.startsWith('image/')) { showToast('请上传图片', 'error'); continue; }
       if (file.size > 15 * 1024 * 1024) { showToast(file.name + '超过15MB', 'error'); continue; }
       const base64 = await readFileAsBase64(file);
@@ -676,6 +855,60 @@ function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
 }
 window.initUploadArea = initUploadArea;
 
+// 改动 19: 通用上传区域，支持 image/video/audio
+function initUploadAreaGeneric(areaId, inputId, previewId, maxFiles, acceptType, onChange) {
+  const area = document.getElementById(areaId);
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  let files = [];
+
+  if (!area || !input) return { clear: () => {} };
+
+  area.onclick = () => input.click();
+  input.onchange = async (e) => {
+    for (let file of e.target.files) {
+      if (files.length >= maxFiles) {
+        const remaining = maxFiles - files.length;
+        showToast(remaining > 0 ? '还能添加' + remaining + '个' : '已达到上限' + maxFiles + '个', 'warning');
+        break;
+      }
+      const prefix = acceptType === 'video' ? 'video/' : acceptType === 'audio' ? 'audio/' : 'image/';
+      if (!file.type.startsWith(prefix)) { showToast('请上传' + acceptType + '文件', 'error'); continue; }
+      const sizeLimit = acceptType === 'video' ? 100 : acceptType === 'audio' ? 50 : 15;
+      if (file.size > sizeLimit * 1024 * 1024) { showToast(file.name + '超过' + sizeLimit + 'MB', 'error'); continue; }
+      const base64 = await readFileAsBase64(file);
+      files.push({ name: file.name, base64 });
+    }
+    renderPreview();
+    if (onChange) onChange(files.map(f => f.base64));
+    input.value = '';
+  };
+
+  function renderPreview() {
+    preview.innerHTML = '';
+    files.forEach((f, idx) => {
+      const item = document.createElement('div');
+      item.className = 'preview-item';
+      let mediaHtml = '';
+      if (acceptType === 'video') {
+        mediaHtml = '<video src="' + escapeAttr(f.base64) + '" muted style="width:100%;height:100%;object-fit:cover;"></video>';
+      } else if (acceptType === 'audio') {
+        mediaHtml = '<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,0.15);"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6c5ce7" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>';
+      } else {
+        mediaHtml = '<img src="' + escapeAttr(f.base64) + '">';
+      }
+      item.innerHTML = '<span class="preview-index">' + (idx + 1) + '</span>' + mediaHtml + '<button class="remove-btn" data-idx="' + idx + '">×</button>';
+      preview.appendChild(item);
+    });
+    preview.querySelectorAll('.remove-btn').forEach(btn => {
+      btn.onclick = (e) => { e.stopPropagation(); files.splice(parseInt(btn.dataset.idx), 1); renderPreview(); if (onChange) onChange(files.map(f => f.base64)); };
+    });
+  }
+
+  return { clear: () => { files = []; renderPreview(); if (onChange) onChange([]); }, getFiles: () => files.map(f => f.base64) };
+}
+window.initUploadAreaGeneric = initUploadAreaGeneric;
+
 // ============ 历史记录 ============
 async function renderHistory() {
   const history = await Store.getHistory();
@@ -687,11 +920,16 @@ async function renderHistory() {
     card.className = 'history-card';
     const date = new Date(r.createdAt);
     const timeStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    let thumb = r.type === 'image' && r.result?.[0] ? '<img src="' + r.result[0] + '" loading="lazy">' :
-      r.type === 'video' && r.thumbnail ? '<video src="' + r.thumbnail + '" muted></video>' : '<div class="history-thumb-placeholder">无预览</div>';
+    // 改动 28: 视频缩略图用播放图标占位，不加载视频
+    let thumb = r.type === 'image' && r.result?.[0] ? '<img src="' + escapeAttr(r.result[0]) + '" loading="lazy">' :
+      r.type === 'video' ? '<div class="history-thumb-video"><svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div>' : '<div class="history-thumb-placeholder">无预览</div>';
     const url = r.result?.[0] || '';
     const downloadLabel = r.type === 'image' ? '下载图片' : '下载视频';
-    card.innerHTML = '<div class="history-thumb" data-url="' + url + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + (r.mode || '') + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + '</div></div><div class="history-actions"><a class="btn-secondary download-btn" href="' + url + '" download data-id="' + r.id + '">' + downloadLabel + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
+    // 改动 15: 状态标记
+    const statusLabel = r.status === 'pending' ? ' · 生成中' : r.status === 'failed' ? ' · 失败' : r.status === 'timeout' ? ' · 超时' : '';
+    const statusColor = r.status === 'pending' || r.status === 'timeout' ? '#ffb443' : r.status === 'failed' ? '#ff4d6d' : '';
+    const statusHtml = statusLabel ? '<span style="color:' + statusColor + ';">' + statusLabel + '</span>' : '';
+    card.innerHTML = '<div class="history-thumb" data-url="' + escapeAttr(url) + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div><div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + escapeHtml(r.mode || '') + statusHtml + '</span><div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div><div class="history-time">' + timeStr + '</div></div><div class="history-actions"><a class="btn-secondary download-btn" href="' + escapeAttr(url) + '" download data-id="' + r.id + '">' + downloadLabel + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
     // 整个卡片可点击打开详情
     card.style.cursor = 'pointer';
     card.onclick = (e) => {
@@ -722,12 +960,25 @@ function showHistoryPreview(record) {
   // 媒体预览
   let mediaHtml = '';
   if (isImage && url) {
-    mediaHtml = '<img src="' + url + '" style="max-width:100%;max-height:45vh;border-radius:8px;object-fit:contain;">';
+    mediaHtml = '<img src="' + escapeAttr(url) + '" style="max-width:100%;max-height:45vh;border-radius:8px;object-fit:contain;">';
   } else if (url) {
-    mediaHtml = '<video src="' + url + '" controls loop style="max-width:100%;max-height:45vh;border-radius:8px;"></video>';
+    mediaHtml = '<video src="' + escapeAttr(url) + '" controls loop playsinline style="max-width:100%;max-height:45vh;border-radius:8px;"></video>';
+  } else if (record.status === 'pending') {
+    mediaHtml = '<div style="color:#ffb443;padding:40px;font-size:14px;text-align:center;">任务正在生成中，请稍后查看</div>';
   } else {
     mediaHtml = '<div style="color:#888;padding:40px;font-size:14px;">结果已过期或不可用</div>';
   }
+
+  // 改动 14: 尾帧图展示
+  let lastFrameHtml = '';
+  if (record.lastFrame) {
+    lastFrameHtml = '<div style="margin-top:10px;"><div style="color:#a0a0b8;font-size:12px;margin-bottom:4px;">尾帧图</div><img src="' + escapeAttr(record.lastFrame) + '" style="max-width:100%;max-height:30vh;border-radius:8px;object-fit:contain;"></div>';
+  }
+
+  // 改动 29: URL 过期提示
+  const expiryWarning = url
+    ? '<div style="color:#ffb443;font-size:12px;margin-top:8px;">⚠ 下载链接约 24 小时内有效，请及时保存</div>'
+    : '';
 
   // 参数标签
   const p = record.params || {};
@@ -778,16 +1029,16 @@ function showHistoryPreview(record) {
     '</div>';
 
   modal.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;width:100%;max-width:520px;">' +
-    mediaHtml + detailHtml + actionsHtml + '</div>';
+    mediaHtml + lastFrameHtml + detailHtml + expiryWarning + actionsHtml + '</div>';
 
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
   document.body.appendChild(modal);
 
   document.getElementById('btnClosePreview').onclick = () => modal.remove();
   if (url) {
-    document.getElementById('btnCopyLink').onclick = () => { navigator.clipboard.writeText(url); showToast('链接已复制', 'success'); };
+    document.getElementById('btnCopyLink').onclick = async () => { const ok = await copyToClipboard(url); showToast(ok ? '链接已复制' : '复制失败', ok ? 'success' : 'error'); };
   }
-  document.getElementById('btnCopyPrompt').onclick = () => { navigator.clipboard.writeText(record.prompt || ''); showToast('提示词已复制', 'success'); };
+  document.getElementById('btnCopyPrompt').onclick = async () => { const ok = await copyToClipboard(record.prompt || ''); showToast(ok ? '提示词已复制' : '复制失败', ok ? 'success' : 'error'); };
   document.getElementById('btnDeleteRecord').onclick = async () => {
     await Store.removeHistory(record.id);
     modal.remove();
@@ -828,9 +1079,25 @@ function reuseHistoryParams(record) {
       const el = document.getElementById('vidResolution');
       if (el) el.value = record.params.resolution;
     }
-    if (record.params?.duration) {
+    if (record.params?.ratio) {
+      const el = document.getElementById('vidRatio');
+      if (el) el.value = record.params.ratio;
+    }
+    if (record.params?.duration !== undefined) {
       const el = document.getElementById('vidDuration');
       if (el) el.value = record.params.duration;
+    }
+    if (record.params?.seed !== undefined) {
+      const el = document.getElementById('vidSeed');
+      if (el) el.value = record.params.seed;
+    }
+    if (record.params?.audio !== undefined) {
+      const el = document.getElementById('vidGenerateAudio');
+      if (el) el.checked = record.params.audio;
+    }
+    if (record.params?.watermark !== undefined) {
+      const el = document.getElementById('vidWatermark');
+      if (el) el.checked = record.params.watermark;
     }
     showToast('已填入参数，图片需手动上传', 'success');
   }
@@ -919,6 +1186,11 @@ async function syncHistoryFromCloud() {
     if (merged.length > 500) merged.length = 500;
     await Store.saveHistory(merged);
     window._historyRendered = false;
+    // 改动 34: 如果当前在历史页，立即刷新
+    if (document.getElementById('page-history')?.classList.contains('active')) {
+      renderHistory();
+      window._historyRendered = true;
+    }
   } catch (e) {
     console.warn('同步历史记录失败: ', e);
   }

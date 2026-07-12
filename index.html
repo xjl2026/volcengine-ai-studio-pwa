@@ -107,11 +107,23 @@
           <div class="upload-area" id="vidRefUpload"><span>点击选择参考图片（最多9张）</span><input type="file" id="vidRefInput" accept="image/*" multiple style="display:none;"></div>
           <div class="preview-list" id="vidRefPreview"></div>
         </div>
+        <!-- 参考视频，仅 2.0 系列 -->
+        <div class="form-group" id="vidRefVideoGroup" style="display:none;">
+          <label>参考视频 <span class="hint">作为风格/运镜参考，不会作为视频内容，可选，最多3段</span></label>
+          <div class="upload-area" id="vidRefVideoUpload"><span>点击选择参考视频（最多3段）</span><input type="file" id="vidRefVideoInput" accept="video/*" multiple style="display:none;"></div>
+          <div class="preview-list" id="vidRefVideoPreview"></div>
+        </div>
+        <!-- 参考音频，仅 2.0 系列 -->
+        <div class="form-group" id="vidRefAudioGroup" style="display:none;">
+          <label>参考音频 <span class="hint">作为背景音乐/音效参考，可选，最多3段</span></label>
+          <div class="upload-area" id="vidRefAudioUpload"><span>点击选择参考音频（最多3段）</span><input type="file" id="vidRefAudioInput" accept="audio/*" multiple style="display:none;"></div>
+          <div class="preview-list" id="vidRefAudioPreview"></div>
+        </div>
 
         <div class="form-group"><label>模型</label><select id="vidModel"></select></div>
         <div class="form-group"><label>分辨率</label><select id="vidResolution"></select></div>
         <div class="form-group"><label>宽高比</label><select id="vidRatio"><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option><option value="21:9">21:9</option><option value="adaptive">智能适配</option></select></div>
-        <div class="form-group"><label>时长（秒） <span class="hint">-1 为自动</span></label><input type="number" id="vidDuration" value="5" min="2" max="15" step="1"></div>
+        <div class="form-group"><label>时长（秒） <span class="hint">-1 为自动</span></label><input type="number" id="vidDuration" value="5" min="-1" max="15" step="1"></div>
         <div class="form-group" id="vidSeedGroup"><label>随机种子 <span class="hint">-1 为随机</span></label><input type="number" id="vidSeed" value="-1"></div>
         <div class="form-group" id="vidFramesGroup" style="display:none;"><label>帧数 <span class="hint">留空按时长算，范围29-289</span></label><input type="number" id="vidFrames" placeholder="留空按时长" min="29" max="289"></div>
         <div class="form-group" id="vidAudioGroup"><label><input type="checkbox" id="vidGenerateAudio" checked> 生成音频</label></div>
@@ -120,6 +132,10 @@
         <div class="form-group" id="vidCameraFixedGroup" style="display:none;"><label><input type="checkbox" id="vidCameraFixed"> 固定摄像头</label></div>
         <div class="form-group" id="vidDraftGroup" style="display:none;"><label><input type="checkbox" id="vidDraft"> 样片模式</label></div>
         <div class="form-group" id="vidServiceTierGroup" style="display:none;"><label>服务等级</label><select id="vidServiceTier"><option value="default">在线推理</option><option value="flex">离线推理(省钱)</option></select></div>
+        <!-- 联网搜索，仅 2.0 系列 -->
+        <div class="form-group" id="vidWebSearchGroup" style="display:none;"><label><input type="checkbox" id="vidWebSearch"> 联网搜索 <span class="hint">让模型搜索网络素材辅助生成</span></label></div>
+        <!-- 排队优先级，仅 2.0 系列 -->
+        <div class="form-group" id="vidPriorityGroup" style="display:none;"><label>排队优先级 <span class="hint">0-9，数字越大越优先排队，默认0</span></label><input type="number" id="vidPriority" value="0" min="0" max="9" step="1"></div>
 
         <button class="btn-primary btn-generate" id="btnGenVideo">生成视频</button>
         <div class="result-panel" id="vidResultPanel"><div class="result-placeholder"><p>生成的视频将在这里展示</p></div></div>
