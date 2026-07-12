@@ -1,5 +1,9 @@
 // 应用主逻辑 - PWA 移动版
 
+// 版本信息
+const APP_VERSION = '1.0.0';
+const APP_BUILD = '2026-07-12';
+
 let imgMode = 't2i';
 let vidMode = 't2v'; // t2v / i2v
 let imgRefImages = [];
@@ -67,6 +71,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
   });
+
+  // 显示版本信息
+  const versionEl = document.getElementById('versionText');
+  const dateEl = document.getElementById('versionDate');
+  if (versionEl) versionEl.textContent = '版本 v' + APP_VERSION;
+  if (dateEl) dateEl.textContent = '更新于 ' + APP_BUILD;
 });
 
 // ============ 导航 ============
