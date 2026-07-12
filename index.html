@@ -109,8 +109,11 @@
         </div>
         <!-- 参考视频，仅 2.0 系列 -->
         <div class="form-group" id="vidRefVideoGroup" style="display:none;">
-          <label>参考视频 <span class="hint">作为风格/运镜参考，不会作为视频内容，可选，最多3段</span></label>
-          <div class="upload-area" id="vidRefVideoUpload"><span>点击选择参考视频（最多3段）</span><input type="file" id="vidRefVideoInput" accept="video/*" multiple style="display:none;"></div>
+          <label>参考视频 <span class="hint">粘贴历史记录中的视频链接即可（API 要求网页 URL）</span></label>
+          <div class="url-input-row">
+            <input type="text" id="vidRefVideoUrlInput" placeholder="粘贴视频 URL（如 https://...）" class="url-input">
+            <button id="btnAddRefVideoUrl" class="btn-secondary btn-sm">添加</button>
+          </div>
           <div class="preview-list" id="vidRefVideoPreview"></div>
         </div>
         <!-- 参考音频，仅 2.0 系列 -->

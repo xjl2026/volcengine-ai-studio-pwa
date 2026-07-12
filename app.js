@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.3';
+const APP_VERSION = '1.3.4';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -10,13 +10,12 @@ let imgRefImages = [];
 let vidFirstImage = [];
 let vidTailImage = [];
 let vidRefImages = [];
-let vidRefVideos = [];
+let vidRefVideoUrls = [];
 let vidRefAudios = [];
 let imgUploadCtrl = null;
 let vidFirstUploadCtrl = null;
 let vidTailUploadCtrl = null;
 let vidRefUploadCtrl = null;
-let vidRefVideoUploadCtrl = null;
 let vidRefAudioUploadCtrl = null;
 let imgAbortController = null;
 // 视频轮询并发控制
@@ -475,8 +474,44 @@ function initVideoPage() {
   vidFirstUploadCtrl = initUploadArea('vidFirstUpload', 'vidFirstInput', 'vidFirstPreview', 1, imgs => vidFirstImage = imgs);
   vidTailUploadCtrl = initUploadArea('vidTailUpload', 'vidTailInput', 'vidTailPreview', 1, imgs => vidTailImage = imgs);
   vidRefUploadCtrl = initUploadArea('vidRefUpload', 'vidRefInput', 'vidRefPreview', 9, imgs => vidRefImages = imgs);
-  // 参考视频/音频上传（仅 2.0 系列）
-  vidRefVideoUploadCtrl = initUploadAreaGeneric('vidRefVideoUpload', 'vidRefVideoInput', 'vidRefVideoPreview', 3, 'video', urls => vidRefVideos = urls);
+  // 参考视频 —— API 要求网页 URL，改用 URL 输入
+  vidRefVideoUrls = [];
+  document.getElementById('btnAddRefVideoUrl').onclick = () => {
+    const input = document.getElementById('vidRefVideoUrlInput');
+    const url = input.value.trim();
+    if (!url) { showToast('请粘贴视频 URL', 'warning'); return; }
+    if (!url.startsWith('http')) { showToast('请粘贴有效的网页 URL（以 http/https 开头）', 'error'); return; }
+    if (vidRefVideoUrls.length >= 3) { showToast('最多添加 3 个参考视频', 'warning'); return; }
+    if (vidRefVideoUrls.includes(url)) { showToast('该 URL 已添加', 'warning'); return; }
+    vidRefVideoUrls.push(url);
+    input.value = '';
+    renderRefVideoUrlPreview();
+  };
+  // 回车也可以添加
+  document.getElementById('vidRefVideoUrlInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('btnAddRefVideoUrl').click(); }
+  });
+
+  function renderRefVideoUrlPreview() {
+    const preview = document.getElementById('vidRefVideoPreview');
+    preview.innerHTML = '';
+    vidRefVideoUrls.forEach((url, idx) => {
+      const item = document.createElement('div');
+      item.className = 'preview-item';
+      // 视频 URL 预览：显示一个视频播放图标
+      const shortUrl = url.length > 40 ? url.substring(0, 37) + '...' : url;
+      item.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,0.15);flex-direction:column;gap:2px;">'
+        + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6c5ce7" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>'
+        + '<span style="font-size:9px;color:var(--text-muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + shortUrl + '</span></div>'
+        + '<button class="remove-btn" data-idx="' + idx + '">&times;</button>';
+      preview.appendChild(item);
+    });
+    // 删除按钮
+    preview.querySelectorAll('.remove-btn').forEach(btn => {
+      btn.onclick = (e) => { e.stopPropagation(); vidRefVideoUrls.splice(parseInt(btn.dataset.idx), 1); renderRefVideoUrlPreview(); };
+    });
+  }
+  // 音频也改 URL 输入
   vidRefAudioUploadCtrl = initUploadAreaGeneric('vidRefAudioUpload', 'vidRefAudioInput', 'vidRefAudioPreview', 3, 'audio', urls => vidRefAudios = urls);
   updateVideoModelUI(); updateVideoModeUI();
   document.getElementById('btnGenVideo').onclick = handleVideoGenerate;
@@ -568,7 +603,7 @@ function updateVideoModeUI() {
     if (vidFirstUploadCtrl) vidFirstUploadCtrl.clear();
     if (vidTailUploadCtrl) vidTailUploadCtrl.clear();
     if (vidRefUploadCtrl) vidRefUploadCtrl.clear();
-    if (vidRefVideoUploadCtrl) vidRefVideoUploadCtrl.clear();
+    vidRefVideoUrls = []; renderRefVideoUrlPreview();
     if (vidRefAudioUploadCtrl) vidRefAudioUploadCtrl.clear();
   }
   const model = document.getElementById('vidModel').value;
@@ -611,7 +646,7 @@ async function handleVideoGenerate() {
 
   // 首帧/尾帧与参考媒体互斥 —— API 不允许混用
   const hasFirstOrLastFrame = (vidFirstImage.length > 0 || vidTailImage.length > 0);
-  const hasRefMedia = (vidRefImages.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0);
+  const hasRefMedia = (vidRefImages.length > 0 || vidRefVideoUrls.length > 0 || vidRefAudios.length > 0);
   if (hasFirstOrLastFrame && hasRefMedia) {
     showToast('首帧/尾帧与参考媒体不能同时使用，已自动忽略参考媒体', 'warning');
   }
@@ -621,7 +656,7 @@ async function handleVideoGenerate() {
     firstFrameImages: vidMode === 'i2v' && vidFirstImage.length > 0 ? vidFirstImage : undefined,
     tailFrameImages: vidMode === 'i2v' && vidTailImage.length > 0 ? vidTailImage : undefined,
     refImages: vidMode === 'i2v' && vidRefImages.length > 0 ? vidRefImages : undefined,
-    refVideos: vidMode === 'i2v' && vidRefVideos.length > 0 ? vidRefVideos : undefined,
+    refVideos: vidMode === 'i2v' && vidRefVideoUrls.length > 0 ? vidRefVideoUrls : undefined,
     refAudios: vidMode === 'i2v' && vidRefAudios.length > 0 ? vidRefAudios : undefined,
     resolution: document.getElementById('vidResolution').value,
     ratio: document.getElementById('vidRatio').value,
