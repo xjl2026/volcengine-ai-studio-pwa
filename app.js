@@ -23,12 +23,6 @@ window._currentPollingTaskId = null;
 window._restoringTask = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // 版本号最先显示，不受后续异步操作影响
-  const versionEl = document.getElementById('versionText');
-  const dateEl = document.getElementById('versionDate');
-  if (versionEl) versionEl.textContent = 'v' + APP_VERSION;
-  if (dateEl) dateEl.textContent = APP_BUILD;
-
   initNav();
   initImagePage();
   initVideoPage();
