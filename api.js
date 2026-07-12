@@ -281,18 +281,15 @@ async function pollVideoTask(taskId, onProgress, interval, maxAttempts) {
 
 // ============ 测试连接 ============
 async function testConnection(apiKey, apiDomain) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await fetch((apiDomain || ARK_BASE_URL).replace(/\/$/, '') + '/api/v3/models', {
-      headers: { 'Authorization': 'Bearer ' + apiKey },
-      signal: controller.signal
+      headers: { 'Authorization': 'Bearer ' + apiKey }
     });
-    clearTimeout(timeout);
-    return { success: res.status === 200, message: res.status === 200 ? '连接成功' : 'HTTP ' + res.status };
+    if (res.status === 200) return { success: true, message: '连接成功' };
+    let msg = 'HTTP ' + res.status;
+    try { const body = await res.json(); if (body.error?.message) msg = body.error.message; } catch {}
+    return { success: false, message: msg };
   } catch (e) {
-    clearTimeout(timeout);
-    if (e.name === 'AbortError') return { success: false, message: '连接超时（30秒），请检查网络' };
     return { success: false, message: e.message || '网络错误' };
   }
 }
