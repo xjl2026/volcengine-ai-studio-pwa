@@ -191,7 +191,7 @@ function buildVideoRequestBody(params) {
 
   // 首帧图（不填 role，默认 first_frame）
   if (firstFrameImages && firstFrameImages.length > 0) {
-    firstFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url } }));
+    firstFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'first_frame' }));
   }
   // 尾帧图（role: last_frame）
   if (tailFrameImages && tailFrameImages.length > 0) {
