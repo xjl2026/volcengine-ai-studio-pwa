@@ -586,7 +586,9 @@ function updateVideoModeUI() {
     if (vidFirstUploadCtrl) vidFirstUploadCtrl.clear();
     if (vidTailUploadCtrl) vidTailUploadCtrl.clear();
     if (vidRefUploadCtrl) vidRefUploadCtrl.clear();
-    vidRefVideoUrls = []; renderRefVideoUrlPreview();
+    vidRefVideoUrls = [];
+    const rvPreview = document.getElementById('vidRefVideoPreview');
+    if (rvPreview) rvPreview.innerHTML = '';
     if (vidRefAudioUploadCtrl) vidRefAudioUploadCtrl.clear();
   }
   const model = document.getElementById('vidModel').value;
@@ -1193,27 +1195,25 @@ window.renderHistory = renderHistory;
 window.showHistoryPreview = showHistoryPreview;
 
 // ============ 清空历史 ============
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => {
-    const btn = document.getElementById('btnClearHistory');
-    if (btn) btn.onclick = async () => {
-      if (confirm('确定清空所有历史记录？')) {
-        await Store.clearHistory();
-        // 退出选择模式
-        if (isSelectMode) { isSelectMode = false; selectedRecords.clear(); updateSelectModeUI(); }
-        renderHistory();
-        showToast('已清空', 'success');
-      }
-    };
-  }, 100);
+setTimeout(() => {
+  const btn = document.getElementById('btnClearHistory');
+  if (btn) btn.onclick = async () => {
+    if (confirm('确定清空所有历史记录？')) {
+      await Store.clearHistory();
+      // 退出选择模式
+      if (isSelectMode) { isSelectMode = false; selectedRecords.clear(); updateSelectModeUI(); }
+      renderHistory();
+      showToast('已清空', 'success');
+    }
+  };
+}, 100);
 
-  // 离线检测
-  window.addEventListener('online', () => { document.getElementById('offlineIndicator').style.display = 'none'; });
-  window.addEventListener('offline', () => { document.getElementById('offlineIndicator').style.display = 'block'; });
+// 离线检测
+window.addEventListener('online', () => { document.getElementById('offlineIndicator').style.display = 'none'; });
+window.addEventListener('offline', () => { document.getElementById('offlineIndicator').style.display = 'block'; });
 
-  // 选择模式 + 连续播放
-  initSelectMode();
-});
+// 选择模式 + 连续播放
+initSelectMode();
 
 // ============ 通知提醒 ============
 function notifyTaskComplete(type, prompt) {
