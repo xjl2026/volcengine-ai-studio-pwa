@@ -61,9 +61,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 版本信息已在上方 DOMContentLoaded 开头显示，此处无需重复
-});
-
 // ============ 导航 ============
 function initNav() {
   document.querySelectorAll('.nav-item').forEach(item => {
