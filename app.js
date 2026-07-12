@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.6';
+const APP_VERSION = '1.3.7';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -23,6 +23,12 @@ window._currentPollingTaskId = null;
 window._restoringTask = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // 版本号最先显示，不受后续异步操作影响
+  const versionEl = document.getElementById('versionText');
+  const dateEl = document.getElementById('versionDate');
+  if (versionEl) versionEl.textContent = 'v' + APP_VERSION;
+  if (dateEl) dateEl.textContent = APP_BUILD;
+
   initNav();
   initImagePage();
   initVideoPage();
@@ -61,11 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 显示版本信息
-  const versionEl = document.getElementById('versionText');
-  const dateEl = document.getElementById('versionDate');
-  if (versionEl) versionEl.textContent = 'v' + APP_VERSION;
-  if (dateEl) dateEl.textContent = APP_BUILD;
+  // 版本信息已在上方 DOMContentLoaded 开头显示，此处无需重复
 });
 
 // ============ 导航 ============
