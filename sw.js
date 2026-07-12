@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存
-const CACHE_NAME = 'volc-ai-v9';
+const CACHE_NAME = 'volc-ai-v10';
 const CACHE_FILES = [
   './',
   './index.html',
@@ -12,7 +12,10 @@ const CACHE_FILES = [
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_FILES)).catch(() => {})
+    // 先清掉所有旧缓存，再预缓存新文件
+    caches.keys().then(keys => Promise.all(
+      keys.map(k => caches.delete(k))
+    )).then(() => caches.open(CACHE_NAME)).then(cache => cache.addAll(CACHE_FILES)).catch(() => {})
   );
   self.skipWaiting();
 });
@@ -24,6 +27,17 @@ self.addEventListener('activate', (e) => {
     ))
   );
   self.clients.claim();
+});
+
+// 收到消息：强制清缓存并通知页面刷新
+self.addEventListener('message', (e) => {
+  if (e.data === 'FORCE_UPDATE') {
+    caches.keys().then(keys => Promise.all(
+      keys.map(k => caches.delete(k))
+    )).then(() => {
+      e.source.postMessage('CACHE_CLEARED');
+    });
+  }
 });
 
 self.addEventListener('fetch', (e) => {

@@ -32,6 +32,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 恢复未完成的视频任务（页面重新加载时）
   restorePendingVideoTask();
   if ('serviceWorker' in navigator) {
+    // 先清掉所有旧的 Service Worker 缓存
+    if (window.caches) {
+      caches.keys().then(keys => {
+        keys.forEach(k => {
+          if (k !== 'volc-ai-v10') {
+            caches.delete(k);
+          }
+        });
+      });
+    }
     navigator.serviceWorker.register('sw.js').then(reg => {
       // 检测到新 SW 就等它激活，然后刷新页面
       reg.addEventListener('updatefound', () => {
@@ -46,6 +56,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       // 每次打开页面时主动检查更新
       reg.update();
+      // 如果当前 SW 版本太旧，发消息强制清缓存
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage('FORCE_UPDATE');
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          if (e.data === 'CACHE_CLEARED') {
+            location.reload();
+          }
+        });
+      }
     }).catch(() => {});
   }
   // 页面从后台切回前台时也检查 SW 更新
