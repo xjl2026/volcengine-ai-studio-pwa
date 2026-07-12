@@ -1,8 +1,8 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.2.0';
-const APP_BUILD = '2026-07-12 11:35:04';
+const APP_VERSION = '1.2.1';
+const APP_BUILD = '2026-07-12 12:15:00';
 
 let imgMode = 't2i';
 let vidMode = 't2v'; // t2v / i2v
@@ -87,16 +87,24 @@ function initNav() {
 }
 
 function switchPage(name) {
+  // 离开历史页时退出选择模式
+  if (name !== 'history' && isSelectMode) {
+    isSelectMode = false;
+    selectedRecords.clear();
+    updateSelectModeUI();
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const page = document.getElementById('page-' + name);
   const nav = document.querySelector('.nav-item[data-page="' + name + '"]');
   if (page) page.classList.add('active');
   if (nav) nav.classList.add('active');
-  // 历史记录只在首次进入时渲染，避免每次切换都重新加载缩略图
-  if (name === 'history' && !window._historyRendered) {
-    renderHistory();
-    window._historyRendered = true;
+  // 历史记录：选择模式下始终重渲染，普通模式只首次渲染
+  if (name === 'history') {
+    if (isSelectMode || !window._historyRendered) {
+      renderHistory();
+      if (!isSelectMode) window._historyRendered = true;
+    }
   }
 }
 window.switchPage = switchPage;
@@ -1163,13 +1171,22 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     const btn = document.getElementById('btnClearHistory');
     if (btn) btn.onclick = async () => {
-      if (confirm('确定清空所有历史记录？')) { await Store.clearHistory(); renderHistory(); showToast('已清空', 'success'); }
+      if (confirm('确定清空所有历史记录？')) {
+        await Store.clearHistory();
+        // 退出选择模式
+        if (isSelectMode) { isSelectMode = false; selectedRecords.clear(); updateSelectModeUI(); }
+        renderHistory();
+        showToast('已清空', 'success');
+      }
     };
   }, 100);
 
   // 离线检测
   window.addEventListener('online', () => { document.getElementById('offlineIndicator').style.display = 'none'; });
   window.addEventListener('offline', () => { document.getElementById('offlineIndicator').style.display = 'block'; });
+
+  // 选择模式 + 连续播放
+  initSelectMode();
 });
 
 // ============ 通知提醒 ============
@@ -1194,6 +1211,275 @@ function notifyTaskComplete(type, prompt) {
   }
 }
 window.notifyTaskComplete = notifyTaskComplete;
+
+// ============ 历史记录选择模式 + 连续播放 ============
+let isSelectMode = false;
+let selectedRecords = new Set();
+let playlistVideos = [];
+let playlistIndex = 0;
+let playlistVideoEl = null;
+
+function initSelectMode() {
+  const toggleBtn = document.getElementById('btnToggleSelect');
+  const batchBar = document.getElementById('batchActionsBar');
+
+  toggleBtn.onclick = () => {
+    isSelectMode = !isSelectMode;
+    selectedRecords.clear();
+    updateSelectModeUI();
+  };
+
+  // 全选
+  document.getElementById('btnSelectAll').onclick = async () => {
+    const history = await Store.getHistory();
+    const videos = history.filter(r => r.type === 'video' && r.result?.[0]);
+    if (selectedRecords.size === videos.length) {
+      selectedRecords.clear();
+    } else {
+      videos.forEach(r => selectedRecords.add(r.id));
+    }
+    updateSelectModeUI();
+  };
+
+  // 连续播放
+  document.getElementById('btnPlaylistPlay').onclick = () => {
+    startPlaylist();
+  };
+
+  // 服务端合并 - 勾选时提示（功能待实现）
+  document.getElementById('batchServerMerge').onchange = function() {
+    if (this.checked) {
+      showToast('服务端合并功能将在方案一中实现（Supabase Edge Function + FFmpeg）', 'info', 4000);
+    }
+  };
+
+  // 播放器事件
+  initPlaylistPlayer();
+}
+
+function updateSelectModeUI() {
+  const toggleBtn = document.getElementById('btnToggleSelect');
+  const batchBar = document.getElementById('batchActionsBar');
+
+  if (isSelectMode) {
+    toggleBtn.textContent = '☑ 退出选择';
+    toggleBtn.classList.add('active');
+    batchBar.classList.add('visible');
+  } else {
+    toggleBtn.textContent = '☐ 选择视频';
+    toggleBtn.classList.remove('active');
+    batchBar.classList.remove('visible');
+  }
+
+  // 更新选中计数
+  document.getElementById('batchSelectedCount').textContent = '已选 ' + selectedRecords.size + ' 个';
+
+  // 重新渲染历史记录以更新选中状态
+  renderHistorySelectMode();
+}
+
+async function renderHistorySelectMode() {
+  const history = await Store.getHistory();
+  const list = document.getElementById('historyList');
+  list.innerHTML = '';
+
+  if (!history || history.length === 0) {
+    list.innerHTML = '<div class="empty-state"><p>暂无历史记录</p></div>';
+    return;
+  }
+
+  history.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'history-card';
+    if (isSelectMode) card.classList.add('select-mode');
+    if (selectedRecords.has(r.id)) card.classList.add('selected');
+
+    const date = new Date(r.createdAt);
+    const timeStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const expiry = getExpiryInfo(r.createdAt);
+    const expiryHtml = '<span class="history-expiry" style="color:' + expiry.color + ';font-size:11px;">' + expiry.label + '</span>';
+
+    let thumb = r.type === 'image' && r.result?.[0] ? '<img src="' + escapeAttr(r.result[0]) + '" loading="lazy">' :
+      r.type === 'video' ? '<div class="history-thumb-video"><svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div>' : '<div class="history-thumb-placeholder">无预览</div>';
+
+    const url = r.result?.[0] || '';
+    const statusLabel = r.status === 'pending' ? ' · 生成中' : r.status === 'failed' ? ' · 失败' : r.status === 'timeout' ? ' · 超时' : '';
+    const statusColor = r.status === 'pending' || r.status === 'timeout' ? '#ffb443' : r.status === 'failed' ? '#ff4d6d' : '';
+    const statusHtml = statusLabel ? '<span style="color:' + statusColor + ';">' + statusLabel + '</span>' : '';
+
+    card.innerHTML = '<input type="checkbox" class="select-checkbox" ' + (selectedRecords.has(r.id) ? 'checked' : '') + '>' +
+      '<div class="history-thumb" data-url="' + escapeAttr(url) + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div>' +
+      '<div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + escapeHtml(r.mode || '') + statusHtml + '</span>' +
+      '<div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div>' +
+      '<div class="history-time">' + timeStr + ' · ' + expiryHtml + '</div></div>' +
+      '<div class="history-actions"><a class="btn-secondary download-btn" href="' + escapeAttr(url) + '" download data-id="' + r.id + '">' + (r.type === 'image' ? '下载图片' : '下载视频') + '</a><button class="btn-secondary delete-btn" data-id="' + r.id + '">删除</button></div>';
+
+    // 选择模式下点卡片 = 勾选/取消（仅视频可勾选）
+    card.onclick = (e) => {
+      if (isSelectMode && r.type === 'video' && r.result?.[0]) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (selectedRecords.has(r.id)) {
+          selectedRecords.delete(r.id);
+        } else {
+          selectedRecords.add(r.id);
+        }
+        updateSelectModeUI();
+        return;
+      }
+      if (!isSelectMode) {
+        if (e.target.closest('.history-actions')) return;
+        showHistoryPreview(r);
+      }
+    };
+
+    // checkbox 点击（选择模式）
+    const checkbox = card.querySelector('.select-checkbox');
+    checkbox.onclick = (e) => {
+      e.stopPropagation();
+      if (r.type !== 'video' || !r.result?.[0]) {
+        e.preventDefault();
+        showToast('仅可选择有视频结果的历史记录', 'warning');
+        return;
+      }
+      if (checkbox.checked) {
+        selectedRecords.add(r.id);
+      } else {
+        selectedRecords.delete(r.id);
+      }
+      updateSelectModeUI();
+    };
+
+    // 下载按钮
+    const downloadBtn = card.querySelector('.download-btn');
+    if (downloadBtn) downloadBtn.onclick = (e) => { e.stopPropagation(); };
+
+    // 删除按钮
+    const delBtn = card.querySelector('.delete-btn');
+    if (delBtn) delBtn.onclick = async (e) => {
+      e.stopPropagation();
+      selectedRecords.delete(r.id);
+      await Store.removeHistory(r.id);
+      window._historyRendered = false;
+      renderHistorySelectMode();
+      showToast('已删除', 'success');
+    };
+
+    list.appendChild(card);
+  });
+}
+
+// 重写 renderHistory 以支持选择模式
+const _originalRenderHistory = renderHistory;
+renderHistory = async function() {
+  if (isSelectMode) {
+    await renderHistorySelectMode();
+  } else {
+    await _originalRenderHistory();
+  }
+};
+
+// ============ 连续播放播放器 ============
+function initPlaylistPlayer() {
+  playlistVideoEl = document.getElementById('playlistVideo');
+
+  document.getElementById('btnPlaylistClose').onclick = closePlaylist;
+  document.getElementById('btnPlaylistPrev').onclick = playPrev;
+  document.getElementById('btnPlaylistNext').onclick = playNext;
+  document.getElementById('btnPlaylistPlayPause').onclick = togglePlayPause;
+
+  playlistVideoEl.addEventListener('ended', () => {
+    playNext();
+  });
+
+  playlistVideoEl.addEventListener('play', () => {
+    document.getElementById('btnPlaylistPlayPause').textContent = '⏸';
+  });
+  playlistVideoEl.addEventListener('pause', () => {
+    document.getElementById('btnPlaylistPlayPause').textContent = '▶';
+  });
+
+  // 物理返回键关闭播放器
+  window.addEventListener('popstate', (e) => {
+    const player = document.getElementById('playlistPlayer');
+    if (player && player.style.display !== 'none') {
+      e.preventDefault();
+      closePlaylist();
+    }
+  });
+}
+
+async function startPlaylist() {
+  const history = await Store.getHistory();
+  // 按选中的顺序获取视频 URL
+  const selected = history.filter(r => selectedRecords.has(r.id) && r.result?.[0]);
+  playlistVideos = selected.map(r => ({
+    url: r.result[0],
+    prompt: r.prompt || '',
+    id: r.id
+  }));
+
+  if (playlistVideos.length === 0) {
+    showToast('请先选择至少一个视频', 'warning');
+    return;
+  }
+
+  playlistIndex = 0;
+  document.getElementById('playlistPlayer').style.display = 'flex';
+  // 禁用页面滚动
+  document.body.style.overflow = 'hidden';
+  loadPlaylistVideo(playlistIndex);
+}
+
+function loadPlaylistVideo(idx) {
+  if (idx < 0 || idx >= playlistVideos.length) return;
+  const v = playlistVideos[idx];
+  playlistVideoEl.src = v.url;
+  playlistVideoEl.load();
+  playlistVideoEl.play().catch(() => {});
+  updatePlaylistUI();
+}
+
+function updatePlaylistUI() {
+  const total = playlistVideos.length;
+  document.getElementById('playlistVideoLabel').textContent = (playlistIndex + 1) + ' / ' + total;
+  document.getElementById('playlistProgress').textContent = (playlistIndex + 1) + ' / ' + total;
+  document.getElementById('btnPlaylistPrev').style.opacity = playlistIndex === 0 ? '0.3' : '1';
+  document.getElementById('btnPlaylistNext').style.opacity = playlistIndex === total - 1 ? '0.3' : '1';
+}
+
+function playNext() {
+  if (playlistIndex < playlistVideos.length - 1) {
+    playlistIndex++;
+    loadPlaylistVideo(playlistIndex);
+  } else {
+    closePlaylist();
+    showToast('播放列表已全部播完', 'success');
+  }
+}
+
+function playPrev() {
+  if (playlistIndex > 0) {
+    playlistIndex--;
+    loadPlaylistVideo(playlistIndex);
+  }
+}
+
+function togglePlayPause() {
+  if (playlistVideoEl.paused) {
+    playlistVideoEl.play().catch(() => {});
+  } else {
+    playlistVideoEl.pause();
+  }
+}
+
+function closePlaylist() {
+  playlistVideoEl.pause();
+  playlistVideoEl.removeAttribute('src');
+  playlistVideoEl.load();
+  document.getElementById('playlistPlayer').style.display = 'none';
+  document.body.style.overflow = '';
+}
 
 // ============ 跨设备同步 ============
 async function initSync() {

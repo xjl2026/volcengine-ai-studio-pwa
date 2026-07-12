@@ -143,9 +143,34 @@
 
       <!-- 历史记录页 -->
       <section id="page-history" class="page">
-        <div class="page-header"><h1>历史记录</h1><button class="btn-secondary btn-clear-history" id="btnClearHistory">清空</button></div>
+        <div class="page-header"><h1>历史记录</h1><div style="display:flex;gap:8px;align-items:center;"><button class="btn-secondary btn-select-mode" id="btnToggleSelect">☐ 选择视频</button><button class="btn-secondary btn-clear-history" id="btnClearHistory">清空</button></div></div>
         <div class="history-list" id="historyList"><div class="empty-state"><p>暂无历史记录</p></div></div>
       </section>
+
+      <!-- 批量操作栏（选择模式下显示） -->
+      <div class="batch-actions-bar" id="batchActionsBar">
+        <span class="batch-selected-count" id="batchSelectedCount">已选 0 个</span>
+        <button class="btn-select-all" id="btnSelectAll">全选</button>
+        <button class="btn-primary" id="btnPlaylistPlay">▶ 连续播放</button>
+        <label class="batch-server-merge-label" id="batchServerMergeLabel">
+          <input type="checkbox" id="batchServerMerge"> 在服务端合并
+        </label>
+      </div>
+
+      <!-- 连续播放播放器 -->
+      <div class="playlist-player-overlay" id="playlistPlayer" style="display:none;">
+        <div class="playlist-close-btn" id="btnPlaylistClose">✕</div>
+        <div class="playlist-video-label" id="playlistVideoLabel">1 / 1</div>
+        <div class="playlist-video-wrapper">
+          <video id="playlistVideo" controls playsinline></video>
+        </div>
+        <div class="playlist-controls">
+          <button class="btn-ctrl" id="btnPlaylistPrev" title="上一个">⏮</button>
+          <button class="btn-ctrl" id="btnPlaylistPlayPause" title="播放/暂停">▶</button>
+          <button class="btn-ctrl" id="btnPlaylistNext" title="下一个">⏭</button>
+          <div class="playlist-progress" id="playlistProgress">1 / 1</div>
+        </div>
+      </div>
 
       <!-- 设置页 -->
       <section id="page-settings" class="page">
