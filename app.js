@@ -1612,3 +1612,4 @@ function updateSyncStatus() {
     el.style.color = '#a0a0b8';
   }
 }
+});
