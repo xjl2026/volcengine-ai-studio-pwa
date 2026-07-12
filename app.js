@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -1345,7 +1345,10 @@ async function renderHistorySelectMode() {
     const statusColor = r.status === 'pending' || r.status === 'timeout' ? '#ffb443' : r.status === 'failed' ? '#ff4d6d' : '';
     const statusHtml = statusLabel ? '<span style="color:' + statusColor + ';">' + statusLabel + '</span>' : '';
 
-    card.innerHTML = '<input type="checkbox" class="select-checkbox" ' + (selectedRecords.includes(r.id) ? 'checked' : '') + '>' +
+    const selectOrder = selectedRecords.indexOf(r.id);
+    const orderBadge = selectOrder >= 0 ? '<span class="select-order-badge">' + (selectOrder + 1) + '</span>' : '';
+
+    card.innerHTML = '<input type="checkbox" class="select-checkbox" ' + (selectedRecords.includes(r.id) ? 'checked' : '') + '>' + orderBadge +
       '<div class="history-thumb" data-url="' + escapeAttr(url) + '" data-type="' + r.type + '" data-id="' + r.id + '">' + thumb + '</div>' +
       '<div class="history-info"><span class="history-type">' + (r.type === 'image' ? '图片' : '视频') + ' · ' + escapeHtml(r.mode || '') + statusHtml + '</span>' +
       '<div class="history-prompt">' + escapeHtml(r.prompt || '') + '</div>' +
