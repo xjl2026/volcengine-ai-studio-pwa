@@ -280,30 +280,26 @@ async function pollVideoTask(taskId, onProgress, interval, maxAttempts) {
 }
 
 // ============ 测试连接 ============
-// 注意：不能用 GET /api/v3/models，浏览器 CORS 会拦截。
-// 改用 arkRequest（POST 方式），火山方舟对 POST 接口配了 CORS 头。
+// 不能用 GET /api/v3/models（CORS 拦截），不能用 arkRequest（会真的生成图片+signal问题）
+// 直接发一个 POST 请求到图片生成接口，不带 signal，只看返回的状态码
 async function testConnection(apiKey, apiDomain) {
+  const url = (apiDomain || ARK_BASE_URL).replace(/\/$/, '') + '/api/v3/images/generations';
   try {
-    // 临时设置配置，让 arkRequest 能读到
-    const oldConfig = await Store.getConfig();
-    await Store.saveConfig({ apiKey, apiDomain: apiDomain || ARK_BASE_URL });
-    // 用一个最轻量的 POST 请求测试：发送一个空 prompt 的图片生成请求
-    // 火山方舟会返回 400（参数错误），但只要能返回响应就说明 API Key 和域名没问题
-    const result = await arkRequest('/api/v3/images/generations', {
+    const res = await fetch(url, {
       method: 'POST',
-      body: { model: 'doubao-seedream-5-0-pro-260628', prompt: 'test' },
-      timeout: 15000
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + apiKey
+      },
+      body: JSON.stringify({ model: 'doubao-seedream-5-0-pro-260628', prompt: 'test' })
     });
-    // 恢复原配置
-    await Store.saveConfig(oldConfig);
-    // HTTP 400 说明请求到了服务端，key 有效（只是参数不全）
-    // HTTP 401 说明 key 无效
-    // HTTP 200 说明完全正常
-    if (result.status === 200) return { success: true, message: '连接成功' };
-    if (result.status === 400) return { success: true, message: '连接成功（API Key 有效）' };
-    if (result.status === 401) return { success: false, message: 'API Key 无效或已过期' };
-    if (result.data?.error?.message) return { success: false, message: result.data.error.message };
-    return { success: false, message: 'HTTP ' + result.status };
+    if (res.status === 200) return { success: true, message: '连接成功' };
+    if (res.status === 400) return { success: true, message: '连接成功（API Key 有效）' };
+    if (res.status === 401) return { success: false, message: 'API Key 无效或已过期' };
+    if (res.status === 429) return { success: false, message: '请求过于频繁，请稍后再试' };
+    let msg = 'HTTP ' + res.status;
+    try { const body = await res.json(); if (body.error?.message) msg = body.error.message; } catch {}
+    return { success: false, message: msg };
   } catch (e) {
     return { success: false, message: e.message || '网络错误' };
   }
