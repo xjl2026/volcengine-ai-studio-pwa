@@ -189,25 +189,27 @@ function buildVideoRequestBody(params) {
 
   if (prompt) body.content.push({ type: 'text', text: prompt });
 
-  // 首帧图（不填 role，默认 first_frame）
+  const hasFirstOrLastFrame = (firstFrameImages && firstFrameImages.length > 0) || (tailFrameImages && tailFrameImages.length > 0);
+
+  // 首帧图
   if (firstFrameImages && firstFrameImages.length > 0) {
     firstFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'first_frame' }));
   }
-  // 尾帧图（role: last_frame）
+  // 尾帧图
   if (tailFrameImages && tailFrameImages.length > 0) {
     tailFrameImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'last_frame' }));
   }
-  // 参考图（role: reference_image，仅 2.0 系列）
-  if (refImages && refImages.length > 0) {
-    refImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' }));
-  }
-  // 参考视频（role: reference_video，仅 2.0 系列）
-  if (refVideos && refVideos.length > 0) {
-    refVideos.forEach(url => body.content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' }));
-  }
-  // 参考音频（role: reference_audio，仅 2.0 系列）
-  if (refAudios && refAudios.length > 0) {
-    refAudios.forEach(url => body.content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' }));
+  // 参考图/视频/音频 —— 不能与首帧/尾帧共存（API 限制）
+  if (!hasFirstOrLastFrame) {
+    if (refImages && refImages.length > 0) {
+      refImages.forEach(url => body.content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' }));
+    }
+    if (refVideos && refVideos.length > 0) {
+      refVideos.forEach(url => body.content.push({ type: 'video_url', video_url: { url }, role: 'reference_video' }));
+    }
+    if (refAudios && refAudios.length > 0) {
+      refAudios.forEach(url => body.content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' }));
+    }
   }
   if (resolution) body.resolution = resolution;
   if (ratio) body.ratio = ratio;

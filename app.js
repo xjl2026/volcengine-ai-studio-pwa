@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -608,6 +608,14 @@ async function handleVideoGenerate() {
 
   // 改动 12: seed=0 不被当作未设置
   const seedRaw = document.getElementById('vidSeed').value.trim();
+
+  // 首帧/尾帧与参考媒体互斥 —— API 不允许混用
+  const hasFirstOrLastFrame = (vidFirstImage.length > 0 || vidTailImage.length > 0);
+  const hasRefMedia = (vidRefImages.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0);
+  if (hasFirstOrLastFrame && hasRefMedia) {
+    showToast('首帧/尾帧与参考媒体不能同时使用，已自动忽略参考媒体', 'warning');
+  }
+
   const params = {
     mode: vidMode, model, prompt,
     firstFrameImages: vidMode === 'i2v' && vidFirstImage.length > 0 ? vidFirstImage : undefined,
