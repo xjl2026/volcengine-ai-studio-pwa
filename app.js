@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window.caches) {
       caches.keys().then(keys => {
         keys.forEach(k => {
-          if (k !== 'volc-ai-v10') {
+          if (k !== 'volc-ai-v11') {
             caches.delete(k);
           }
         });
@@ -56,15 +56,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       // 每次打开页面时主动检查更新
       reg.update();
-      // 如果当前 SW 版本太旧，发消息强制清缓存
-      if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage('FORCE_UPDATE');
-        navigator.serviceWorker.addEventListener('message', (e) => {
-          if (e.data === 'CACHE_CLEARED') {
-            location.reload();
-          }
-        });
-      }
     }).catch(() => {});
   }
   // 页面从后台切回前台时也检查 SW 更新
