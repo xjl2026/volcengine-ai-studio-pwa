@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -1454,6 +1454,41 @@ function initPlaylistPlayer() {
   playlistVideoEl.addEventListener('pause', onPause);
   playlistVideoEl2.addEventListener('pause', onPause);
 
+  // 进度条联动
+  const seek = document.getElementById('playlistSeek');
+  const currentTimeEl = document.getElementById('playlistCurrentTime');
+  const durationEl = document.getElementById('playlistDuration');
+
+  function fmtTime(t) {
+    if (!t || isNaN(t)) return '0:00';
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  const onTimeUpdate = () => {
+    const el = playlistActiveEl;
+    if (!el || !el.duration) return;
+    seek.value = (el.currentTime / el.duration) * 100;
+    currentTimeEl.textContent = fmtTime(el.currentTime);
+  };
+  const onMetaLoaded = () => {
+    const el = playlistActiveEl;
+    if (!el) return;
+    durationEl.textContent = fmtTime(el.duration);
+  };
+  playlistVideoEl.addEventListener('timeupdate', onTimeUpdate);
+  playlistVideoEl2.addEventListener('timeupdate', onTimeUpdate);
+  playlistVideoEl.addEventListener('loadedmetadata', onMetaLoaded);
+  playlistVideoEl2.addEventListener('loadedmetadata', onMetaLoaded);
+
+  // 用户拖进度条
+  seek.addEventListener('input', () => {
+    const el = playlistActiveEl;
+    if (!el || !el.duration) return;
+    el.currentTime = (seek.value / 100) * el.duration;
+  });
+
   // 物理返回键关闭播放器
   window.addEventListener('popstate', (e) => {
     const player = document.getElementById('playlistPlayer');
@@ -1494,14 +1529,7 @@ function loadPlaylistVideo(idx) {
   // 设置当前活跃 video 元素的源并播放
   playlistActiveEl.src = v.url;
   playlistActiveEl.load();
-  // 先去掉 controls 防止 iOS 自动弹出控制条
-  playlistActiveEl.removeAttribute('controls');
-  playlistActiveEl.play().then(() => {
-    // 播起来后加回 controls，用户轻触才显示
-    playlistActiveEl.setAttribute('controls', '');
-  }).catch(() => {
-    playlistActiveEl.setAttribute('controls', '');
-  });
+  playlistActiveEl.play().catch(() => {});
   updatePlaylistUI();
   // 预加载下一段
   preloadNextVideo(idx + 1);
@@ -1540,14 +1568,9 @@ function swapToNextVideo() {
 
     // 显示并播放下一段
     nextEl.style.display = '';
-    nextEl.removeAttribute('controls'); // 先隐藏控制条
     playlistActiveEl = nextEl;
     playlistIndex = nextIdx;
-    nextEl.play().then(() => {
-      nextEl.setAttribute('controls', ''); // 播起来后再加回
-    }).catch(() => {
-      nextEl.setAttribute('controls', '');
-    });
+    nextEl.play().catch(() => {});
     updatePlaylistUI();
     // 预加载下下一段
     preloadNextVideo(nextIdx + 1);

@@ -250,9 +250,13 @@ select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.o
   position: fixed; bottom: 0; left: 0; right: 0;
   background: rgba(0,0,0,0.85); padding: 12px 16px;
   padding-bottom: max(12px, env(safe-area-inset-bottom));
-  display: flex; align-items: center; gap: 12px;
   z-index: 10002; max-width: 600px; margin: 0 auto;
 }
+.playlist-seek-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.playlist-time { font-size: 11px; color: #a0a0b8; min-width: 36px; text-align: center; }
+.playlist-seek { flex: 1; height: 4px; -webkit-appearance: none; appearance: none; background: rgba(255,255,255,0.2); border-radius: 2px; outline: none; }
+.playlist-seek::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #00d4aa; cursor: pointer; }
+.playlist-buttons-row { display: flex; align-items: center; gap: 12px; }
 .playlist-controls .btn-ctrl {
   background: rgba(255,255,255,0.12); border: none; border-radius: 50%;
   width: 40px; height: 40px; color: #fff; cursor: pointer;

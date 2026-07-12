@@ -165,14 +165,21 @@
         <div class="playlist-close-btn" id="btnPlaylistClose">✕</div>
         <div class="playlist-video-label" id="playlistVideoLabel">1 / 1</div>
         <div class="playlist-video-wrapper">
-          <video id="playlistVideo" controls playsinline></video>
-          <video id="playlistVideo2" controls playsinline style="display:none;"></video>
+          <video id="playlistVideo" playsinline></video>
+          <video id="playlistVideo2" playsinline style="display:none;"></video>
         </div>
         <div class="playlist-controls">
-          <button class="btn-ctrl" id="btnPlaylistPrev" title="上一个">⏮</button>
-          <button class="btn-ctrl" id="btnPlaylistPlayPause" title="播放/暂停">▶</button>
-          <button class="btn-ctrl" id="btnPlaylistNext" title="下一个">⏭</button>
-          <div class="playlist-progress" id="playlistProgress">1 / 1</div>
+          <div class="playlist-seek-row">
+            <span class="playlist-time" id="playlistCurrentTime">0:00</span>
+            <input type="range" class="playlist-seek" id="playlistSeek" min="0" max="100" value="0" step="0.1">
+            <span class="playlist-time" id="playlistDuration">0:00</span>
+          </div>
+          <div class="playlist-buttons-row">
+            <button class="btn-ctrl" id="btnPlaylistPrev" title="上一个">⏮</button>
+            <button class="btn-ctrl" id="btnPlaylistPlayPause" title="播放/暂停">▶</button>
+            <button class="btn-ctrl" id="btnPlaylistNext" title="下一个">⏭</button>
+            <div class="playlist-progress" id="playlistProgress">1 / 1</div>
+          </div>
         </div>
       </div>
 
@@ -234,7 +241,7 @@
         </div>
 
         <div id="appVersionInfo" style="margin-top:20px;padding:12px 16px;background:var(--bg-tertiary);border-radius:8px;font-size:12px;color:var(--text-secondary);text-align:center;">
-          <span id="versionText">v1.4.2</span>
+          <span id="versionText">v1.4.3</span>
           <span style="margin:0 8px;color:var(--text-muted);">|</span>
           <span id="versionDate">--</span>
         </div>
@@ -248,8 +255,8 @@
   </div>
   <div id="offlineIndicator" style="display:none;position:fixed;top:0;left:0;right:0;background:#ff4d6d;color:#fff;text-align:center;padding:6px;font-size:13px;z-index:9999;">网络已断开</div>
 
-  <script src="api.js?v=1.4.2"></script>
-  <script src="sync.js?v=1.4.2"></script>
-  <script src="app.js?v=1.4.2"></script>
+  <script src="api.js?v=1.4.3"></script>
+  <script src="sync.js?v=1.4.3"></script>
+  <script src="app.js?v=1.4.3"></script>
 </body>
 </html>
