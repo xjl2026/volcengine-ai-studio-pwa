@@ -1458,7 +1458,10 @@ setTimeout(() => {
       // 退出选择模式
       if (isSelectMode) { isSelectMode = false; selectedRecords = []; updateSelectModeUI(); }
       renderHistory();
-      showToast('已清空', 'success');
+      // Store.clearHistory 在同步开启时已显示详细 toast，此处仅在未开启同步时提示
+      if (!(window.SyncManager && SyncManager.isEnabled())) {
+        showToast('已清空', 'success');
+      }
     }
   };
 }, 100);
