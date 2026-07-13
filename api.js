@@ -2,6 +2,12 @@
 
 const ARK_BASE_URL = 'https://ark.cn-beijing.volces.com';
 
+// 统一获取 API 基础域名，自动去除尾部斜杠
+function getApiBaseUrl(config) {
+  const base = String((config && config.apiDomain) || ARK_BASE_URL).trim();
+  return base.replace(/\/+$/, '');
+}
+
 const IMAGE_MODELS = [
   { id: 'doubao-seedream-5-0-pro-260628', name: 'Seedream 5.0 Pro', sizes: ['1K', '2K'], formats: ['png', 'jpeg'],
     caps: { outputFormat: true, sequential: false, stream: false, webSearch: false, optimizeFast: false, maxRefImages: 10 } },
@@ -15,15 +21,15 @@ const IMAGE_MODELS = [
 
 const VIDEO_MODELS = [
   { id: 'doubao-seedance-2-0-260128', name: 'Seedance 2.0', resolutions: ['480p', '720p', '1080p', '4k'], durationRange: [4, 15],
-    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, referenceAudio: true, maxRefAudios: 3, webSearch: true, priority: true } },
+    caps: { supportsFirstFrame: true, supportsLastFrame: true, generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, refVideoMinDuration: 2, refVideoMaxDuration: 15, refVideoMaxTotalDuration: 15, refVideoMaxSize: 209715200, refVideoFormats: ['mp4', 'mov'], refVideoMinFps: 24, refVideoMaxFps: 60, referenceAudio: true, maxRefAudios: 3, refAudioMinDuration: 2, refAudioMaxDuration: 15, refAudioMaxTotalDuration: 15, refAudioMaxSize: 15728640, refAudioFormats: ['wav', 'mp3'], refAudioRequiresOther: true, outputFps: 24, outputFpsSelectable: false, webSearch: true, priority: true } },
   { id: 'doubao-seedance-2-0-fast-260128', name: 'Seedance 2.0 Fast', resolutions: ['480p', '720p'], durationRange: [4, 15],
-    caps: { generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, referenceAudio: true, maxRefAudios: 3, webSearch: true, priority: true } },
+    caps: { supportsFirstFrame: true, supportsLastFrame: true, generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, refVideoMinDuration: 2, refVideoMaxDuration: 15, refVideoMaxTotalDuration: 15, refVideoMaxSize: 209715200, refVideoFormats: ['mp4', 'mov'], refVideoMinFps: 24, refVideoMaxFps: 60, referenceAudio: true, maxRefAudios: 3, refAudioMinDuration: 2, refAudioMaxDuration: 15, refAudioMaxTotalDuration: 15, refAudioMaxSize: 15728640, refAudioFormats: ['wav', 'mp3'], refAudioRequiresOther: true, outputFps: 24, outputFpsSelectable: false, webSearch: true, priority: true } },
   { id: 'doubao-seedance-1-5-pro-251215', name: 'Seedance 1.5 Pro', resolutions: ['480p', '720p', '1080p'], durationRange: [4, 12],
-    caps: { generateAudio: true, seed: true, cameraFixed: true, frames: false, draft: true, serviceTier: false, adaptiveRatio: true, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } },
+    caps: { supportsFirstFrame: true, supportsLastFrame: true, generateAudio: true, seed: true, cameraFixed: true, frames: false, draft: true, serviceTier: false, adaptiveRatio: true, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } },
   { id: 'doubao-seedance-1-0-pro-250528', name: 'Seedance 1.0 Pro', resolutions: ['480p', '720p', '1080p'], durationRange: [2, 12],
-    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } },
+    caps: { supportsFirstFrame: true, supportsLastFrame: true, generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } },
   { id: 'doubao-seedance-1-0-pro-fast-251015', name: 'Seedance 1.0 Pro Fast', resolutions: ['480p', '720p', '1080p'], durationRange: [2, 12],
-    caps: { generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } }
+    caps: { supportsFirstFrame: true, supportsLastFrame: false, generateAudio: false, seed: true, cameraFixed: true, frames: true, draft: false, serviceTier: true, adaptiveRatio: false, maxDuration: 12, referenceImage: false, maxRefImages: 0, referenceVideo: false, maxRefVideos: 0, referenceAudio: false, maxRefAudios: 0, webSearch: false, priority: false } }
 ];
 
 // ============ 配置存储（用 localStorage） ============
@@ -53,13 +59,14 @@ const Store = {
       const exists = history.find(h => h.taskId === record.taskId);
       if (exists) return exists;
     }
-    const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), createdAt: new Date().toISOString(), ...record };
+    const now = new Date().toISOString();
+    const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), recordUid: (crypto.randomUUID ? crypto.randomUUID() : now + '-' + Math.random().toString(36).slice(2, 10)), createdAt: now, updatedAt: now, ...record };
     history.unshift(r);
     if (history.length > 500) history.length = 500;
     await this.saveHistory(history);
     // 同步到云端
     if (window.SyncManager && SyncManager.isEnabled()) {
-      try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); }
+      try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); r._syncPending = true; await this.saveHistory(history); }
     }
     return r;
   },
@@ -68,10 +75,11 @@ const Store = {
     const idx = history.findIndex(h => h.id === id);
     if (idx >= 0) {
       Object.assign(history[idx], patch);
+      history[idx].updatedAt = new Date().toISOString();
       await this.saveHistory(history);
       // 同步到云端
       if (window.SyncManager && SyncManager.isEnabled() && history[idx]._syncId) {
-        try { await SyncManager.pushHistory(history[idx]); } catch (e) { console.warn('更新同步失败: ', e); }
+        try { await SyncManager.pushHistory(history[idx]); } catch (e) { console.warn('更新同步失败: ', e); history[idx]._syncPending = true; await this.saveHistory(history); }
       }
       return history[idx];
     }
@@ -113,11 +121,12 @@ async function arkRequest(path, options = {}) {
   const config = await Store.getConfig();
   if (!config.apiKey) throw new Error('请先在设置中配置 API Key');
 
-  const url = ARK_BASE_URL + path;
+  const url = getApiBaseUrl(config) + path;
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + config.apiKey, ...options.headers };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 600000);
+  const actualTimeout = options.timeout || 600000;
+  const timeoutId = setTimeout(() => controller.abort(), actualTimeout);
   // 支持外部 AbortController（用于用户手动取消）
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
@@ -140,7 +149,7 @@ async function arkRequest(path, options = {}) {
     if (e.name === 'AbortError') {
       // 区分是外部取消还是超时
       if (options.signal && options.signal.aborted) throw new Error('用户取消');
-      throw new Error('请求超时（180秒），请检查网络后重试');
+      throw new Error('请求超时（' + Math.round(actualTimeout / 1000) + '秒），请检查网络后重试');
     }
     throw e;
   }
@@ -283,7 +292,7 @@ async function pollVideoTask(taskId, onProgress, interval, maxAttempts) {
 // 不能用 GET /api/v3/models（CORS 拦截），不能用 arkRequest（会真的生成图片+signal问题）
 // 直接发一个 POST 请求到图片生成接口，不带 signal，只看返回的状态码
 async function testConnection(apiKey, apiDomain) {
-  const url = (apiDomain || ARK_BASE_URL).replace(/\/$/, '') + '/api/v3/images/generations';
+  const url = getApiBaseUrl({ apiDomain }) + '/api/v3/images/generations';
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -293,15 +302,16 @@ async function testConnection(apiKey, apiDomain) {
       },
       body: JSON.stringify({ model: 'doubao-seedream-5-0-pro-260628', prompt: 'test' })
     });
-    if (res.status === 200) return { success: true, message: '连接成功' };
-    if (res.status === 400) return { success: true, message: '连接成功（API Key 有效）' };
-    if (res.status === 401) return { success: false, message: 'API Key 无效或已过期' };
-    if (res.status === 429) return { success: false, message: '请求过于频繁，请稍后再试' };
+    if (res.status === 200) return { success: true, message: '连接成功，API Key 有效' };
+    if (res.status === 400) return { success: false, message: 'API Key 有效，但请求参数有误（400）。连接可用但无法确认完全正常' };
+    if (res.status === 401) return { success: false, message: 'API Key 无效或已过期（401）' };
+    if (res.status === 403) return { success: false, message: '无权限访问该模型（403），请检查 API Key 权限' };
+    if (res.status === 429) return { success: false, message: '请求过于频繁（429），请稍后再试' };
     let msg = 'HTTP ' + res.status;
     try { const body = await res.json(); if (body.error?.message) msg = body.error.message; } catch {}
     return { success: false, message: msg };
   } catch (e) {
-    return { success: false, message: e.message || '网络错误' };
+    return { success: false, message: '无法连接：' + (e.message || '网络错误') + '。请检查域名和网络' };
   }
 }
 

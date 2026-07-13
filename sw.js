@@ -12,18 +12,15 @@ const CACHE_FILES = [
   './manifest.json'
 ];
 
+// install: 只缓存，不自动 skipWaiting（等待用户确认后再激活）
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_FILES)).then(() => {
-      // 只删旧版本缓存，不删全部（避免误伤其他存储）
-      return caches.keys().then(keys => Promise.all(
-        keys.filter(k => k.startsWith('volc-ai-') && k !== CACHE_NAME).map(k => caches.delete(k))
-      ));
-    }).catch(err => console.warn('SW install failed, will retry:', err))
+    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_FILES)).catch(err => console.warn('SW install failed:', err))
   );
-  self.skipWaiting();
+  // 不调用 self.skipWaiting()，等待消息触发
 });
 
+// activate: 清理旧缓存
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then(keys => Promise.all(
@@ -33,22 +30,24 @@ self.addEventListener('activate', (e) => {
   self.clients.claim();
 });
 
+// 消息监听：用户确认后才 skipWaiting
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
+// fetch: network-first
 self.addEventListener('fetch', (e) => {
-  // 只缓存同源请求，不拦截 API 调用
   if (e.request.url.startsWith(self.location.origin) && e.request.method === 'GET') {
     e.respondWith(
-      // 网络优先：先尝试从网络获取最新版本，失败再用缓存
       fetch(e.request).then(res => {
-        // 成功获取到新内容，更新缓存
         if (res && res.status === 200) {
           const resClone = res.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(e.request, resClone)).catch(() => {});
         }
         return res;
-      }).catch(() => {
-        // 网络失败时用缓存（离线场景）
-        return caches.match(e.request);
-      })
+      }).catch(() => caches.match(e.request))
     );
   }
 });

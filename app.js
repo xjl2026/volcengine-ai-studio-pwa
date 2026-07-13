@@ -22,6 +22,29 @@ let imgAbortController = null;
 window._currentPollingTaskId = null;
 window._restoringTask = false;
 
+// 统一按钮状态管理
+const imageGenState = { isGenerating: false };
+const videoGenState = { isGenerating: false };
+
+function refreshGenerateButtonState() {
+  // 图片按钮
+  const imgBtn = document.getElementById('btnGenImage');
+  if (imgBtn) {
+    const model = document.getElementById('imgModel');
+    const mi = model ? IMAGE_MODELS.find(m => m.id === model.value) : null;
+    const maxRef = mi ? mi.caps.maxRefImages : 14;
+    const overLimit = (imgMode === 'i2i' || imgMode === 'fusion') && imgRefImages.length > maxRef;
+    imgBtn.disabled = imageGenState.isGenerating || overLimit;
+    if (imageGenState.isGenerating) imgBtn.textContent = '生成中...';
+    else imgBtn.textContent = '生成图片';
+  }
+  // 视频按钮
+  const vidBtn = document.getElementById('btnGenVideo');
+  if (vidBtn) {
+    vidBtn.disabled = videoGenState.isGenerating;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   initNav();
   initImagePage();
@@ -34,32 +57,103 @@ document.addEventListener('DOMContentLoaded', async () => {
   await initSync();
   // 恢复未完成的视频任务（页面重新加载时）
   restorePendingVideoTask();
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').then(reg => {
-      // 检测到新 SW 就等它激活，然后刷新页面
-      reg.addEventListener('updatefound', () => {
-        const newSW = reg.installing;
-        if (newSW) {
-          newSW.addEventListener('statechange', () => {
-            if (newSW.state === 'activated' && navigator.serviceWorker.controller) {
-              location.reload();
-            }
-          });
-        }
-      });
-      // 每次打开页面时主动检查更新
-      reg.update();
-    }).catch(() => {});
+// SW 更新保护
+let swUpdateState = {
+  hasUpdate: false,
+  waitingSW: null,
+  isSafeToUpdate: true,
+  pendingReasons: [],
+  refreshTriggered: false
+};
+
+function checkSafeToUpdate() {
+  swUpdateState.pendingReasons = [];
+  if (imageGenState.isGenerating) swUpdateState.pendingReasons.push('图片生成进行中');
+  if (window._currentPollingTaskId) swUpdateState.pendingReasons.push('视频任务进行中');
+  if (window._migratingData) swUpdateState.pendingReasons.push('数据迁移进行中');
+  if (window._syncWriting) swUpdateState.pendingReasons.push('同步写入进行中');
+  swUpdateState.isSafeToUpdate = swUpdateState.pendingReasons.length === 0;
+  return swUpdateState.isSafeToUpdate;
+}
+
+function showUpdateNotification(msg) {
+  let bar = document.getElementById('swUpdateBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'swUpdateBar';
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#3a8aff;color:#fff;text-align:center;padding:8px;font-size:13px;z-index:9999;cursor:pointer;';
+    document.body.appendChild(bar);
   }
-  // 页面从后台切回前台时也检查 SW 更新
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      restorePendingVideoTask();
-      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.getRegistration().then(reg => reg && reg.update());
+  bar.textContent = msg;
+  bar.onclick = applyUpdate;
+}
+
+function applyUpdate() {
+  if (swUpdateState.refreshTriggered) return;
+  checkSafeToUpdate();
+  if (!swUpdateState.isSafeToUpdate) {
+    showToast(swUpdateState.pendingReasons[0] + '，无法刷新', 'warning');
+    return;
+  }
+  if (imageGenState.isGenerating) {
+    if (!confirm('刷新将中断当前图片生成请求，已提交的请求可能仍在服务端处理。确定要刷新吗？')) return;
+  }
+  swUpdateState.refreshTriggered = true;
+  if (swUpdateState.waitingSW) {
+    swUpdateState.waitingSW.postMessage({ type: 'SKIP_WAITING' });
+  } else {
+    location.reload();
+  }
+}
+
+// SW 注册
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const newSW = reg.installing;
+      if (newSW) {
+        newSW.addEventListener('statechange', () => {
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+            swUpdateState.hasUpdate = true;
+            swUpdateState.waitingSW = newSW;
+            checkSafeToUpdate();
+            if (swUpdateState.isSafeToUpdate) {
+              showUpdateNotification('发现新版本，点击刷新更新');
+            } else {
+              showUpdateNotification('发现新版本，' + swUpdateState.pendingReasons[0] + '，完成后可刷新');
+            }
+          }
+        });
       }
+    });
+    reg.update();
+  }).catch(() => {});
+
+  // controllerchange 只触发一次刷新
+  let controllerChangeHandled = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!controllerChangeHandled && swUpdateState.refreshTriggered) {
+      controllerChangeHandled = true;
+      location.reload();
     }
   });
+}
+
+// 页面从后台切回前台时检查 SW 更新
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    restorePendingVideoTask();
+    if (swUpdateState.hasUpdate && !swUpdateState.refreshTriggered) {
+      checkSafeToUpdate();
+      if (swUpdateState.isSafeToUpdate) {
+        showUpdateNotification('发现新版本，点击刷新更新');
+      }
+    }
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.getRegistration().then(reg => reg && reg.update());
+    }
+  }
+});
 
 // ============ 导航 ============
 function initNav() {
@@ -122,6 +216,20 @@ function escapeAttr(str) {
   return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function validateUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  var trimmed = url.trim().toLowerCase();
+  // 拒绝危险协议
+  if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('vbscript:')) {
+    return false;
+  }
+  // 只允许 http/https
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return false;
+  }
+  return true;
+}
+
 async function copyToClipboard(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -179,6 +287,8 @@ function initSettingsPage() {
     const apiKey = document.getElementById('settingsApiKey').value.trim();
     const apiDomain = document.getElementById('settingsApiDomain').value.trim() || ARK_BASE_URL;
     if (!apiKey) { showToast('请输入 API Key', 'error'); return; }
+    // 二次确认：说明会发起一次最小图片生成请求
+    if (!confirm('纯前端 PWA 无法在不发起业务请求的情况下可靠验证 API Key。\n\n点击"确定"将发起一次最小图片生成请求来验证连接。\n（使用 test 作为提示词，不会生成实际有用的图片）\n\n是否继续？')) return;
     showLoading('测试连接中...');
     try {
       const result = await testConnection(apiKey, apiDomain);
@@ -338,12 +448,28 @@ function updateImageModeUI() {
   const mi = IMAGE_MODELS.find(m => m.id === model);
   const maxRef = mi ? mi.caps.maxRefImages : 14;
 
+  // 动态更新上传限制
+  if (imgUploadCtrl) {
+    imgUploadCtrl.setMax(maxRef);
+    const currentCount = imgUploadCtrl.getCount();
+    const uploadArea = document.getElementById('imgUploadArea');
+    const span = uploadArea ? uploadArea.querySelector('span') : null;
+    if (currentCount > maxRef) {
+      if (uploadArea) uploadArea.style.borderColor = 'var(--danger)';
+      if (span) span.textContent = '已选' + currentCount + '张，当前模型最多' + maxRef + '张，请删除' + (currentCount - maxRef) + '张';
+    } else {
+      if (uploadArea) uploadArea.style.borderColor = '';
+      if (span) span.textContent = '点击选择图片（最多' + maxRef + '张）';
+    }
+    refreshGenerateButtonState();
+  }
+
   switch (imgMode) {
     case 't2i': refGroup.style.display = 'none'; maxGroup.style.display = 'none'; break;
     case 'i2i': refGroup.style.display = 'block'; maxGroup.style.display = 'none';
-      document.querySelector('#imgUploadArea span').textContent = '点击选择图片'; break;
+      break;
     case 'fusion': refGroup.style.display = 'block'; maxGroup.style.display = 'none';
-      document.querySelector('#imgUploadArea span').textContent = '点击选择多张图片'; break;
+      break;
     case 'sequential': refGroup.style.display = 'none'; maxGroup.style.display = 'block'; break;
   }
   if (imgUploadCtrl && (imgMode === 't2i' || imgMode === 'sequential')) imgUploadCtrl.clear();
@@ -355,6 +481,11 @@ async function handleImageGenerate() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { showToast('请输入提示词', 'warning'); return; }
   if ((imgMode === 'i2i' || imgMode === 'fusion') && imgRefImages.length === 0) { showToast('请上传参考图', 'warning'); return; }
+  // 最终兜底校验：参考图数量不超限
+  if ((imgMode === 'i2i' || imgMode === 'fusion') && caps.maxRefImages && imgRefImages.length > caps.maxRefImages) {
+    showToast('参考图最多' + caps.maxRefImages + '张，当前' + imgRefImages.length + '张，请删除多余图片', 'warning');
+    return;
+  }
 
   const model = document.getElementById('imgModel').value;
   const mi = IMAGE_MODELS.find(m => m.id === model);
@@ -377,9 +508,12 @@ async function handleImageGenerate() {
   await doImageGenerate(params, prompt);
 }
 
-// 图片生成实际执行（支持重试，最多自动重试1次）
+// 图片生成实际执行（失败后不自动重试，防止重复扣费）
 async function doImageGenerate(params, prompt, isRetry) {
   const btn = document.getElementById('btnGenImage');
+  // 防双击
+  if (btn.disabled && !isRetry) return;
+  imageGenState.isGenerating = true;
   btn.disabled = true; btn.textContent = '生成中...';
   imgAbortController = new AbortController();
 
@@ -402,11 +536,7 @@ async function doImageGenerate(params, prompt, isRetry) {
         window._historyRendered = false;
       } else { panel.innerHTML = '<div class="result-placeholder"><p>未返回图片数据</p></div>'; showToast('未返回图片数据', 'warning'); }
     } else {
-      // 请求失败：首次失败自动重试一次，重试失败显示按钮
-      if (!isRetry) {
-        showToast('请求失败，自动重试中...', 'warning');
-        return await doImageGenerate(params, prompt, true);
-      }
+      // 请求失败：不自动重试，显示重试按钮
       panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">生成失败</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">' + escapeHtml(result.error || '') + '</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
       document.getElementById('btnRetryImage').onclick = () => doImageGenerate(params, prompt, true);
       showToast('失败: ' + (result.error || ''), 'error');
@@ -417,17 +547,13 @@ async function doImageGenerate(params, prompt, isRetry) {
       panel.innerHTML = '<div class="result-placeholder"><p>已取消</p></div>';
       showToast('已取消', 'info');
     } else {
-      // 网络中断等异常：首次异常自动重试一次，重试失败显示按钮
-      if (!isRetry) {
-        showToast('网络异常，自动重试中...', 'warning');
-        return await doImageGenerate(params, prompt, true);
-      }
-      panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">网络异常</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">' + escapeHtml(e.message) + '</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
+      // 网络异常：不自动重试，提示谨慎重试
+      panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">网络异常</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">网络异常，无法确认服务端是否已完成生成。再次提交可能产生第二次调用费用，请谨慎重试。</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
       document.getElementById('btnRetryImage').onclick = () => doImageGenerate(params, prompt, true);
-      showToast('错误: ' + e.message, 'error');
+      showToast('网络异常，请谨慎重试', 'error');
     }
   }
-  finally { btn.disabled = false; btn.textContent = '生成图片'; imgAbortController = null; }
+  finally { imageGenState.isGenerating = false; btn.disabled = false; btn.textContent = '生成图片'; imgAbortController = null; }
 }
 
 function getImgModeLabel(m) { return { t2i: '文生图', i2i: '图生图', fusion: '多图融合', sequential: '组图' }[m] || m; }
@@ -471,7 +597,7 @@ function initVideoPage() {
     const input = document.getElementById('vidRefVideoUrlInput');
     const url = input.value.trim();
     if (!url) { showToast('请粘贴视频 URL', 'warning'); return; }
-    if (!url.startsWith('http')) { showToast('请粘贴有效的网页 URL（以 http/https 开头）', 'error'); return; }
+    if (!validateUrl(url)) { showToast('请粘贴有效的网页 URL（以 http/https 开头）', 'error'); return; }
     if (vidRefVideoUrls.length >= 3) { showToast('最多添加 3 个参考视频', 'warning'); return; }
     if (vidRefVideoUrls.includes(url)) { showToast('该 URL 已添加', 'warning'); return; }
     vidRefVideoUrls.push(url);
@@ -489,12 +615,37 @@ function initVideoPage() {
     vidRefVideoUrls.forEach((url, idx) => {
       const item = document.createElement('div');
       item.className = 'preview-item';
-      // 视频 URL 预览：显示一个视频播放图标
-      const shortUrl = url.length > 40 ? url.substring(0, 37) + '...' : url;
-      item.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,0.15);flex-direction:column;gap:2px;">'
-        + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6c5ce7" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>'
-        + '<span style="font-size:9px;color:var(--text-muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + shortUrl + '</span></div>'
-        + '<button class="remove-btn" data-idx="' + idx + '">&times;</button>';
+
+      // 使用 DOM API 构建，避免 XSS
+      const inner = document.createElement('div');
+      inner.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,0.15);flex-direction:column;gap:2px;';
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '20');
+      svg.setAttribute('height', '20');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', '#6c5ce7');
+      svg.setAttribute('stroke-width', '2');
+      const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      polygon.setAttribute('points', '5 3 19 12 5 21 5 3');
+      svg.appendChild(polygon);
+
+      const span = document.createElement('span');
+      span.style.cssText = 'font-size:9px;color:var(--text-muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      // 使用 textContent 而非 innerHTML，防止 XSS
+      span.textContent = url.length > 40 ? url.substring(0, 37) + '...' : url;
+
+      inner.appendChild(svg);
+      inner.appendChild(span);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-btn';
+      removeBtn.dataset.idx = idx;
+      removeBtn.textContent = '\u00d7';
+
+      item.appendChild(inner);
+      item.appendChild(removeBtn);
       preview.appendChild(item);
     });
     // 删除按钮
@@ -581,8 +732,8 @@ function updateVideoModeUI() {
     const mi = VIDEO_MODELS.find(m => m.id === model);
     if (mi) {
       const caps = mi.caps;
-      // 改动 13: 1.0 Pro Fast 不支持尾帧
-      const supportsTail = mi.id !== 'doubao-seedance-1-0-pro-fast-251015';
+      // 使用 caps.supportsLastFrame 判断尾帧支持
+      const supportsTail = caps.supportsLastFrame !== false;
       tf.style.display = supportsTail ? 'block' : 'none';
       if (!supportsTail && vidTailUploadCtrl) vidTailUploadCtrl.clear();
       // 参考图/视频/音频 按 caps 显示
@@ -622,26 +773,105 @@ function setVideoFormDisabled(disabled) {
   });
 }
 
+// 统一素材校验
+function validateVideoMedia(mode, mediaState, caps) {
+  if (mode === 't2v') return { valid: true };
+
+  if (mode === 'i2v') {
+    const hasFirst = mediaState.firstFrameImages.length > 0;
+    const hasTail = mediaState.tailFrameImages.length > 0;
+    const hasRefImg = mediaState.refImages.length > 0;
+    const hasRefVid = mediaState.refVideoUrls.length > 0;
+    const hasRefAud = mediaState.refAudios.length > 0;
+    const hasFrame = hasFirst || hasTail;
+    const hasRef = hasRefImg || hasRefVid || hasRefAud;
+
+    // 1. 无任何素材
+    if (!hasFrame && !hasRef)
+      return { valid: false, msg: '请至少添加一种素材' };
+
+    // 2. 首尾帧模式和多模态参考模式不能混用
+    if (hasFrame && hasRef)
+      return { valid: false, msg: '首帧/尾帧与参考媒体不能同时使用。请保留其中一组，移除另一组后再提交。' };
+
+    // 3. 尾帧不能单独使用
+    if (hasTail && !hasFirst)
+      return { valid: false, msg: '尾帧不能单独使用，请先添加首帧' };
+
+    // 4. 首帧最多1张
+    if (hasFirst && mediaState.firstFrameImages.length > 1)
+      return { valid: false, msg: '首帧最多1张图片' };
+
+    // 5. 尾帧最多1张
+    if (hasTail && mediaState.tailFrameImages.length > 1)
+      return { valid: false, msg: '尾帧最多1张图片' };
+
+    // 6. 当前模型是否支持首帧
+    if (hasFirst && (!caps || caps.supportsFirstFrame === false))
+      return { valid: false, msg: '当前模型不支持首帧输入' };
+
+    // 7. 当前模型是否支持尾帧
+    if (hasTail && (!caps || caps.supportsLastFrame === false))
+      return { valid: false, msg: '当前模型不支持尾帧输入' };
+
+    // 8. 模型是否支持参考视频
+    if (hasRefVid && (!caps || !caps.referenceVideo))
+      return { valid: false, msg: '当前模型不支持参考视频' };
+
+    // 9. 模型是否支持参考音频
+    if (hasRefAud && (!caps || !caps.referenceAudio))
+      return { valid: false, msg: '当前模型不支持参考音频' };
+
+    // 10. 参考图数量上限
+    if (hasRefImg && caps && caps.maxRefImages &&
+        mediaState.refImages.length > caps.maxRefImages)
+      return { valid: false, msg: '参考图最多' + caps.maxRefImages + '张，当前' + mediaState.refImages.length + '张' };
+
+    // 11. 参考视频数量上限
+    if (hasRefVid && caps && caps.maxRefVideos &&
+        mediaState.refVideoUrls.length > caps.maxRefVideos)
+      return { valid: false, msg: '参考视频最多' + caps.maxRefVideos + '个，当前' + mediaState.refVideoUrls.length + '个' };
+
+    // 12. 参考音频数量上限
+    if (hasRefAud && caps && caps.maxRefAudios &&
+        mediaState.refAudios.length > caps.maxRefAudios)
+      return { valid: false, msg: '参考音频最多' + caps.maxRefAudios + '段，当前' + mediaState.refAudios.length + '段' };
+
+    // 13. 参考音频不能单独使用
+    if (hasRefAud && !hasRefImg && !hasRefVid)
+      return { valid: false, msg: '参考音频不能单独使用，请至少添加一张参考图或一个参考视频' };
+
+    return { valid: true };
+  }
+
+  return { valid: true };
+}
+
 async function handleVideoGenerate() {
   const config = await Store.getConfig();
   if (!config.apiKey) { showToast('请先配置 API Key', 'warning'); switchPage('settings'); return; }
   const prompt = document.getElementById('vidPrompt').value.trim();
   if (!prompt) { showToast('请输入提示词', 'warning'); return; }
-  if (vidMode === 'i2v' && vidFirstImage.length === 0 && vidTailImage.length === 0 && vidRefImages.length === 0) { showToast('请至少上传一张图片', 'warning'); return; }
 
   const model = document.getElementById('vidModel').value;
   const mi = VIDEO_MODELS.find(m => m.id === model);
   if (!mi) return;
   const caps = mi.caps;
 
-  // 改动 12: seed=0 不被当作未设置
-  const seedRaw = document.getElementById('vidSeed').value.trim();
-
-  // 首帧/尾帧与参考媒体互斥 —— API 不允许混用
-  const hasFirstOrLastFrame = (vidFirstImage.length > 0 || vidTailImage.length > 0);
-  const hasRefMedia = (vidRefImages.length > 0 || vidRefVideoUrls.length > 0 || vidRefAudios.length > 0);
-  if (hasFirstOrLastFrame && hasRefMedia) {
-    showToast('首帧/尾帧与参考媒体不能同时使用，已自动忽略参考媒体', 'warning');
+  // 统一素材校验
+  if (vidMode === 'i2v') {
+    const mediaState = {
+      firstFrameImages: vidFirstImage,
+      tailFrameImages: vidTailImage,
+      refImages: vidRefImages,
+      refVideoUrls: vidRefVideoUrls,
+      refAudios: vidRefAudios
+    };
+    const validation = validateVideoMedia(vidMode, mediaState, caps);
+    if (!validation.valid) {
+      showToast(validation.msg, 'warning');
+      return;
+    }
   }
 
   const params = {
@@ -668,6 +898,7 @@ async function handleVideoGenerate() {
   };
 
   const btn = document.getElementById('btnGenVideo');
+  videoGenState.isGenerating = true;
   btn.disabled = true; btn.textContent = '提交中...';
   setVideoFormDisabled(true);
   renderVideoTaskStatus('queued', '任务提交中...', 0);
@@ -734,7 +965,7 @@ async function handleVideoGenerate() {
   } catch (e) {
     renderVideoTaskStatus('failed', e.message, 0);
     showToast('错误: ' + e.message, 'error');
-  } finally { btn.disabled = false; btn.textContent = '生成视频'; setVideoFormDisabled(false); }
+  } finally { videoGenState.isGenerating = false; btn.disabled = false; btn.textContent = '生成视频'; setVideoFormDisabled(false); }
 }
 
 function getVidModeLabel(m) { return { 't2v': '文生视频', 'i2v': '图生视频' }[m] || m; }
@@ -926,7 +1157,13 @@ function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
     });
   }
 
-  return { clear: () => { files = []; renderPreview(); if (onChange) onChange([]); }, getFiles: () => files.map(f => f.base64) };
+  return {
+    clear: () => { files = []; renderPreview(); if (onChange) onChange([]); },
+    getFiles: () => files.map(f => f.base64),
+    setMax: (newMax) => { maxFiles = newMax; },
+    getMax: () => maxFiles,
+    getCount: () => files.length
+  };
 }
 window.initUploadArea = initUploadArea;
 
@@ -1726,17 +1963,103 @@ function initSyncSettings() {
     hideLoading();
     showToast(result.message, result.success ? 'success' : 'error');
   };
+
+  // 迁移预览
+  document.getElementById('btnMigratePreview').onclick = async () => {
+    if (!SyncManager.isEnabled()) { showToast('请先保存同步设置', 'warning'); return; }
+    const btn = document.getElementById('btnMigratePreview');
+    btn.disabled = true; btn.textContent = '预览中...';
+    const statusEl = document.getElementById('migrationStatus');
+    statusEl.textContent = '正在扫描本地和云端记录...';
+    window._migratingData = true;
+    try {
+      const report = await SyncManager.migrateHistoryData({ preview: true });
+      if (report.success) {
+        var lines = [];
+        lines.push('本地记录: ' + report.localTotal + ' 条');
+        if (report.localMissingRecordUid > 0) lines.push('需补全 recordUid: ' + report.localMissingRecordUid + ' 条');
+        if (report.localMissingUpdatedAt > 0) lines.push('需补全 updatedAt: ' + report.localMissingUpdatedAt + ' 条');
+        lines.push('云端记录: ' + report.cloudTotal + ' 条');
+        if (report.cloudMissingRecordUid > 0) lines.push('云端缺 record_uid: ' + report.cloudMissingRecordUid + ' 条');
+        lines.push('已匹配: ' + report.matched + ' 条');
+        if (report.cloudDuplicates > 0) lines.push('云端重复组: ' + report.cloudDuplicates + ' 组（需删除 ' + report.cloudToDelete + ' 条）');
+        if (report.localToPush > 0) lines.push('需上传本地未匹配: ' + report.localToPush + ' 条');
+        if (report.errors.length > 0) lines.push('错误: ' + report.errors.length + ' 条');
+        statusEl.innerHTML = lines.join('<br>') + '<br><span style="color:var(--text-muted);font-size:12px;">预览完成，确认无误后点击执行迁移</span>';
+        document.getElementById('btnMigrateExecute').disabled = false;
+      } else {
+        statusEl.innerHTML = '<span style="color:#ff4d6d;">预览失败</span><br>' + report.errors.join('<br>');
+      }
+    } catch (e) {
+      statusEl.innerHTML = '<span style="color:#ff4d6d;">预览异常: ' + e.message + '</span>';
+    }
+    window._migratingData = false;
+    btn.disabled = false; btn.textContent = '预览迁移';
+  };
+
+  // 迁移执行
+  document.getElementById('btnMigrateExecute').onclick = async () => {
+    if (!SyncManager.isEnabled()) { showToast('请先保存同步设置', 'warning'); return; }
+    if (!confirm('确认执行迁移？这将修改本地和云端数据。建议先完成预览确认。')) return;
+    const btn = document.getElementById('btnMigrateExecute');
+    btn.disabled = true; btn.textContent = '迁移中...';
+    const previewBtn = document.getElementById('btnMigratePreview');
+    previewBtn.disabled = true;
+    const statusEl = document.getElementById('migrationStatus');
+    statusEl.textContent = '正在执行迁移...';
+    window._migratingData = true;
+    try {
+      const report = await SyncManager.migrateHistoryData({ preview: false });
+      if (report.success) {
+        var lines = [];
+        lines.push('<span style="color:#00d4aa;font-weight:600;">迁移完成</span>');
+        lines.push('本地: ' + report.localTotal + ' 条');
+        lines.push('云端: ' + report.cloudTotal + ' 条');
+        lines.push('匹配: ' + report.matched + ' 条');
+        if (report.cloudToDelete > 0) lines.push('删除重复: ' + report.cloudToDelete + ' 条');
+        if (report.localToPush > 0) lines.push('上传未匹配: ' + report.localToPush + ' 条');
+        if (report.errors.length > 0) {
+          lines.push('<span style="color:#ffb443;">错误: ' + report.errors.length + ' 条</span>');
+          for (var i = 0; i < Math.min(report.errors.length, 5); i++) {
+            lines.push('<span style="font-size:11px;color:var(--text-muted);">' + report.errors[i] + '</span>');
+          }
+        }
+        statusEl.innerHTML = lines.join('<br>');
+        showToast('迁移完成', 'success');
+        // 刷新历史列表
+        window._historyRendered = false;
+        if (document.getElementById('page-history')?.classList.contains('active')) {
+          renderHistory();
+          window._historyRendered = true;
+        }
+      } else {
+        statusEl.innerHTML = '<span style="color:#ff4d6d;">迁移失败</span><br>' + report.errors.join('<br>');
+        showToast('迁移失败', 'error');
+      }
+    } catch (e) {
+      statusEl.innerHTML = '<span style="color:#ff4d6d;">迁移异常: ' + e.message + '</span>';
+      showToast('迁移异常: ' + e.message, 'error');
+    }
+    window._migratingData = false;
+    btn.textContent = '执行迁移';
+    btn.disabled = false;
+    previewBtn.disabled = false;
+    previewBtn.textContent = '预览迁移';
+  };
 }
 
 function updateSyncStatus() {
   const el = document.getElementById('syncStatus');
   if (!el) return;
+  const migSection = document.getElementById('migrationSection');
   if (SyncManager.isEnabled()) {
     el.textContent = '同步已开启';
     el.style.color = '#00d4aa';
+    if (migSection) migSection.style.display = 'block';
   } else {
     el.textContent = '同步未开启';
     el.style.color = '#a0a0b8';
+    if (migSection) migSection.style.display = 'none';
   }
 }
 });

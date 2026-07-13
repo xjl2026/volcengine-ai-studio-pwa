@@ -231,6 +231,16 @@
           </div>
         </div>
 
+        <div class="sync-section" id="migrationSection" style="margin-top:12px;padding:16px;background:var(--bg-tertiary);border-radius:12px;display:none;">
+          <h3 style="margin:0 0 4px 0;font-size:16px;">数据迁移</h3>
+          <p class="hint" style="margin:0 0 12px 0;">为旧记录补全唯一标识，匹配本地与云端记录，清理云端重复数据</p>
+          <div id="migrationStatus" style="font-size:13px;margin-bottom:12px;color:var(--text-muted);">点击下方按钮预览迁移</div>
+          <div class="settings-actions">
+            <button class="btn-secondary" id="btnMigratePreview">预览迁移</button>
+            <button class="btn-primary" id="btnMigrateExecute" disabled>执行迁移</button>
+          </div>
+        </div>
+
         <div class="help-section">
           <h3>使用帮助</h3>
           <div class="help-item"><strong>1. 获取 API Key</strong><p>火山引擎控制台 → 火山方舟 → API Key 管理</p></div>
@@ -238,6 +248,7 @@
           <div class="help-item"><strong>3. 多 Key 管理</strong><p>可保存多个 API Key，通过下拉框切换</p></div>
           <div class="help-item"><strong>4. 跨设备同步</strong><p>在设置中填写 Supabase 信息和同步密钥，所有设备填同样的密钥即可同步历史记录。数据加密存储，无密钥无法解密。</p></div>
           <div class="help-item"><strong>5. 数据安全</strong><p>API Key 仅保存在本地。同步的历史记录使用 AES-GCM 加密，即使数据库泄露也无法读取。</p></div>
+          <div class="help-item"><strong>6. API Key 安全须知</strong><p>API Key 是您的付费凭证，请勿泄露给他人。本应用仅将 Key 存储在浏览器本地，不会上传到任何第三方服务器。测试连接时会向火山方舟 API 发送一次最小请求以验证 Key 有效性。如怀疑 Key 泄露，请立即前往火山引擎控制台轮换 Key。</p></div>
         </div>
 
         <div id="appVersionInfo" style="margin-top:20px;padding:12px 16px;background:var(--bg-tertiary);border-radius:8px;font-size:12px;color:var(--text-secondary);text-align:center;">
