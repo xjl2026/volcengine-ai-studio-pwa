@@ -122,6 +122,20 @@ function escapeAttr(str) {
   return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function validateUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  var trimmed = url.trim().toLowerCase();
+  // 拒绝危险协议
+  if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('vbscript:')) {
+    return false;
+  }
+  // 只允许 http/https
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return false;
+  }
+  return true;
+}
+
 async function copyToClipboard(text) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -471,7 +485,7 @@ function initVideoPage() {
     const input = document.getElementById('vidRefVideoUrlInput');
     const url = input.value.trim();
     if (!url) { showToast('请粘贴视频 URL', 'warning'); return; }
-    if (!url.startsWith('http')) { showToast('请粘贴有效的网页 URL（以 http/https 开头）', 'error'); return; }
+    if (!validateUrl(url)) { showToast('请粘贴有效的网页 URL（以 http/https 开头）', 'error'); return; }
     if (vidRefVideoUrls.length >= 3) { showToast('最多添加 3 个参考视频', 'warning'); return; }
     if (vidRefVideoUrls.includes(url)) { showToast('该 URL 已添加', 'warning'); return; }
     vidRefVideoUrls.push(url);
@@ -489,12 +503,37 @@ function initVideoPage() {
     vidRefVideoUrls.forEach((url, idx) => {
       const item = document.createElement('div');
       item.className = 'preview-item';
-      // 视频 URL 预览：显示一个视频播放图标
-      const shortUrl = url.length > 40 ? url.substring(0, 37) + '...' : url;
-      item.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,0.15);flex-direction:column;gap:2px;">'
-        + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6c5ce7" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>'
-        + '<span style="font-size:9px;color:var(--text-muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + shortUrl + '</span></div>'
-        + '<button class="remove-btn" data-idx="' + idx + '">&times;</button>';
+
+      // 使用 DOM API 构建，避免 XSS
+      const inner = document.createElement('div');
+      inner.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,0.15);flex-direction:column;gap:2px;';
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '20');
+      svg.setAttribute('height', '20');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', '#6c5ce7');
+      svg.setAttribute('stroke-width', '2');
+      const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      polygon.setAttribute('points', '5 3 19 12 5 21 5 3');
+      svg.appendChild(polygon);
+
+      const span = document.createElement('span');
+      span.style.cssText = 'font-size:9px;color:var(--text-muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      // 使用 textContent 而非 innerHTML，防止 XSS
+      span.textContent = url.length > 40 ? url.substring(0, 37) + '...' : url;
+
+      inner.appendChild(svg);
+      inner.appendChild(span);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-btn';
+      removeBtn.dataset.idx = idx;
+      removeBtn.textContent = '\u00d7';
+
+      item.appendChild(inner);
+      item.appendChild(removeBtn);
       preview.appendChild(item);
     });
     // 删除按钮
