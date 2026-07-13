@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.5';
+const APP_VERSION = '1.6.6';
 const APP_BUILD = '2026-07-13 15:20:00';
 
 let imgMode = 't2i';
@@ -2160,15 +2160,78 @@ function initSyncSettings() {
   };
 }
 
+function updateMigrationUI(dbState) {
+  var migSection = document.getElementById('migrationSection');
+  var migActions = document.getElementById('migrationActions');
+  var migStatus = document.getElementById('migrationStatus');
+  var migHint = document.getElementById('migrationHint');
+  var previewBtn = document.getElementById('btnMigratePreview');
+  var executeBtn = document.getElementById('btnMigrateExecute');
+  if (!migSection) return;
+
+  // 默认隐藏
+  migSection.style.display = 'none';
+  if (migActions) migActions.style.display = 'none';
+  if (previewBtn) { previewBtn.disabled = false; previewBtn.textContent = '预览迁移'; }
+  if (executeBtn) { executeBtn.disabled = true; executeBtn.textContent = '执行迁移'; }
+
+  if (!SyncManager.isEnabled()) {
+    // sync 未开启：整个迁移区域隐藏
+    return;
+  }
+
+  switch (dbState) {
+    case 'migration_required':
+      migSection.style.display = 'block';
+      if (migActions) migActions.style.display = 'flex';
+      if (migHint) migHint.textContent = '检测到旧版历史数据，请先预览确认，再执行一次迁移。';
+      if (migStatus) {
+        migStatus.innerHTML = '<span style="color:#ffb443;">数据库存在未迁移的记录，请执行迁移</span>';
+      }
+      if (executeBtn) executeBtn.disabled = true;
+      break;
+
+    case 'constraint_not_ready':
+      migSection.style.display = 'block';
+      if (migActions) migActions.style.display = 'none';
+      if (migHint) migHint.textContent = '历史数据迁移已完成，尚待完成数据库阶段 B 约束，请勿重复执行迁移。';
+      if (migStatus) {
+        migStatus.innerHTML = '<span style="color:#ffb443;">迁移已完成，等待阶段 B 约束</span>';
+      }
+      break;
+
+    case 'ready':
+      migSection.style.display = 'block';
+      if (migActions) migActions.style.display = 'none';
+      if (migHint) migHint.textContent = '历史数据迁移已完成，后续无需重复操作。';
+      if (migStatus) {
+        migStatus.innerHTML = '<span style="color:#00d4aa;font-weight:600;">迁移已完成，数据库已就绪</span>';
+      }
+      break;
+
+    case 'schema_not_ready':
+      migSection.style.display = 'block';
+      if (migActions) migActions.style.display = 'none';
+      if (migHint) migHint.textContent = '数据库尚未完成阶段 A 升级，迁移功能暂不可用。';
+      if (migStatus) {
+        migStatus.innerHTML = '<span style="color:#ff4d6d;">数据库未升级，迁移不可用</span>';
+      }
+      break;
+
+    default:
+      // auth_error, network_error, 空值或未知状态：隐藏迁移区域
+      migSection.style.display = 'none';
+      break;
+  }
+}
+
 function updateSyncStatus(dbState) {
   const el = document.getElementById('syncStatus');
   if (!el) return;
-  const migSection = document.getElementById('migrationSection');
   if (SyncManager.isEnabled()) {
     var stateText = '';
     var stateColor = '#00d4aa';
     if (!dbState) {
-      // 未传入状态，尝试从缓存读取
       dbState = SyncManager._dbState;
     }
     if (dbState === 'schema_not_ready') {
@@ -2192,11 +2255,13 @@ function updateSyncStatus(dbState) {
     }
     el.textContent = '同步已开启' + stateText;
     el.style.color = stateColor;
-    if (migSection) migSection.style.display = 'block';
   } else {
     el.textContent = '同步未开启';
     el.style.color = '#a0a0b8';
-    if (migSection) migSection.style.display = 'none';
   }
+  updateMigrationUI(dbState);
 }
+
+window.updateMigrationUI = updateMigrationUI;
+window.updateSyncStatus = updateSyncStatus;
 });
