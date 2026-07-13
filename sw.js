@@ -1,7 +1,7 @@
 // Service Worker - 离线缓存
 // 每次构建替换 CACHE_NAME 以确保旧缓存被清除
-// BUILD_CACHE: volc-ai-1783917040
-const CACHE_NAME = 'volc-ai-1783917040';
+// BUILD_CACHE: volc-ai-1783917541
+const CACHE_NAME = 'volc-ai-1783917541';
 const CACHE_FILES = [
   './',
   './index.html',
