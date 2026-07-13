@@ -392,7 +392,11 @@ const SyncManager = {
       try {
         var record = await decryptObj(this._syncKey, rows[i].encrypted_data, rows[i].iv);
         record._syncId = rows[i].id;
-        if (rows[i].record_uid) record._cloudRecordUid = rows[i].record_uid;
+        // v1.6.5: 云端 record_uid 同时写入标准 recordUid 字段，避免重复拉取
+        if (rows[i].record_uid) {
+          record.recordUid = rows[i].record_uid;
+          record._cloudRecordUid = rows[i].record_uid;
+        }
         if (rows[i].updated_at) record._cloudUpdatedAt = rows[i].updated_at;
         if (rows[i].is_deleted !== undefined) record._cloudIsDeleted = rows[i].is_deleted;
         records.push(record);
