@@ -60,20 +60,36 @@ const Store = {
       if (exists) return exists;
     }
     const now = new Date().toISOString();
-    const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), recordUid: (crypto.randomUUID ? crypto.randomUUID() : now + '-' + Math.random().toString(36).slice(2, 10)), createdAt: now, updatedAt: now, ...record };
+    // v1.6.1: 统一使用 crypto.randomUUID()，不降级为非 UUID 字符串
+    if (!crypto.randomUUID) {
+      console.error('浏览器不支持 crypto.randomUUID()');
+      throw new Error('浏览器不支持 crypto.randomUUID()，无法生成合法 UUID');
+    }
+    const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), recordUid: crypto.randomUUID(), createdAt: now, updatedAt: now, ...record };
     history.unshift(r);
     if (history.length > 500) history.length = 500;
     await this.saveHistory(history);
-    // 同步到云端（阶段B：使用 on_conflict Upsert）
+    // 同步到云端：检查数据库状态后再决定是否写入
     if (window.SyncManager && SyncManager.isEnabled()) {
       try {
-        const result = await SyncManager.upsertHistory(r);
-        if (result) {
-          r._syncId = result.syncId;
-          r._cloudUpdatedAt = result.cloudUpdatedAt;
-          r._syncPending = false;
+        var dbState = await SyncManager.checkDbState();
+        if (dbState === 'ready') {
+          // 数据库就绪：正式 Upsert
+          const result = await SyncManager.upsertHistory(r);
+          if (result) {
+            r._syncId = result.syncId;
+            r._cloudUpdatedAt = result.cloudUpdatedAt;
+            r._syncPending = false;
+          }
+        } else {
+          // 数据库未就绪：标记为待同步，不发送请求
+          r._syncPending = true;
+          console.warn('数据库未就绪 (' + dbState + ')，记录已保存到本地，待数据库升级后自动同步');
         }
-      } catch (e) { console.warn('推送同步失败: ', e); r._syncPending = true; }
+      } catch (e) {
+        console.warn('推送同步失败: ', e);
+        r._syncPending = true;
+      }
       await this.saveHistory(history);
     }
     return r;
@@ -85,20 +101,26 @@ const Store = {
       Object.assign(history[idx], patch);
       history[idx].updatedAt = new Date().toISOString();
       await this.saveHistory(history);
-      // 同步到云端（阶段B：有 _syncId 走 PATCH，否则走 upsert）
+      // 同步到云端：检查数据库状态后再决定是否写入
       if (window.SyncManager && SyncManager.isEnabled()) {
         try {
-          let result;
-          if (history[idx]._syncId) {
-            result = await SyncManager.updateHistory(history[idx]._syncId, history[idx]);
-          } else if (history[idx].recordUid) {
-            result = await SyncManager.upsertHistory(history[idx]);
-          }
-          if (result) {
-            if (result.syncId) history[idx]._syncId = result.syncId;
-            history[idx]._cloudUpdatedAt = result.cloudUpdatedAt;
-            history[idx]._syncPending = false;
-            history[idx]._syncConflict = false;
+          var dbState = await SyncManager.checkDbState();
+          if (dbState === 'ready') {
+            let result;
+            if (history[idx]._syncId) {
+              result = await SyncManager.updateHistory(history[idx]._syncId, history[idx]);
+            } else if (history[idx].recordUid) {
+              result = await SyncManager.upsertHistory(history[idx]);
+            }
+            if (result) {
+              if (result.syncId) history[idx]._syncId = result.syncId;
+              history[idx]._cloudUpdatedAt = result.cloudUpdatedAt;
+              history[idx]._syncPending = false;
+              history[idx]._syncConflict = false;
+            }
+          } else {
+            // 数据库未就绪：标记为待同步
+            history[idx]._syncPending = true;
           }
         } catch (e) { console.warn('更新同步失败: ', e); history[idx]._syncPending = true; }
         await this.saveHistory(history);
@@ -118,15 +140,22 @@ const Store = {
     record._deletePending = true;
     await this.saveHistory(history);
 
-    // 云端软删除
+    // 云端软删除：检查数据库状态
     if (record.recordUid && window.SyncManager && SyncManager.isEnabled()) {
       try {
-        await SyncManager.deleteHistory(record.recordUid);
-        record._deletePending = false;
-        await this.saveHistory(history);
+        var dbState = await SyncManager.checkDbState();
+        if (dbState === 'ready' || dbState === 'constraint_not_ready' || dbState === 'migration_required') {
+          // schema 字段存在时可以软删除
+          await SyncManager.deleteHistory(record.recordUid);
+          record._deletePending = false;
+        } else {
+          // schema 未就绪：保留 _deletePending，等待后续同步
+          console.warn('数据库未就绪 (' + dbState + ')，墓碑待后续同步');
+        }
       } catch (e) {
         console.warn('墓碑同步失败: ', e);
       }
+      await this.saveHistory(history);
     }
 
     return history.filter(r => !r._isDeleted);
@@ -144,25 +173,35 @@ const Store = {
     }
     await this.saveHistory(history);
 
-    // 云端批量软删除
+    // 云端批量软删除：检查数据库状态
     if (window.SyncManager && SyncManager.isEnabled()) {
-      let successCount = 0;
-      let failCount = 0;
-      for (const record of history) {
-        if (!record._isDeleted || !record._deletePending) continue;
-        if (!record.recordUid) { failCount++; continue; }
-        try {
-          await SyncManager.deleteHistory(record.recordUid);
-          record._deletePending = false;
-          successCount++;
-        } catch (e) {
-          console.warn('墓碑同步失败:', e);
-          failCount++;
+      var dbState = null;
+      try { dbState = await SyncManager.checkDbState(); } catch (e) { dbState = 'network_error'; }
+
+      if (dbState === 'schema_not_ready' || dbState === 'network_error') {
+        // schema 未就绪：只标记本地墓碑，不发送云端请求
+        if (typeof showToast === 'function') {
+          showToast('本地已清空，云端待数据库升级后同步', 'warning');
         }
-      }
-      await this.saveHistory(history);
-      if (typeof showToast === 'function') {
-        showToast('清空完成：成功' + successCount + '条，待同步' + failCount + '条', failCount > 0 ? 'warning' : 'success');
+      } else {
+        let successCount = 0;
+        let failCount = 0;
+        for (const record of history) {
+          if (!record._isDeleted || !record._deletePending) continue;
+          if (!record.recordUid) { failCount++; continue; }
+          try {
+            await SyncManager.deleteHistory(record.recordUid);
+            record._deletePending = false;
+            successCount++;
+          } catch (e) {
+            console.warn('墓碑同步失败:', e);
+            failCount++;
+          }
+        }
+        await this.saveHistory(history);
+        if (typeof showToast === 'function') {
+          showToast('清空完成：成功' + successCount + '条，待同步' + failCount + '条', failCount > 0 ? 'warning' : 'success');
+        }
       }
     }
 

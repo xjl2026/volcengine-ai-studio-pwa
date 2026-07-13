@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const APP_BUILD = '2026-07-12 12:53:00';
 
 let imgMode = 't2i';
@@ -1879,13 +1879,28 @@ async function initSync() {
   const config = Store.getSyncConfig();
   if (config.url && config.anonKey && config.syncKey) {
     await SyncManager.configure(config.url, config.anonKey, config.syncKey);
-    await syncHistoryFromCloud();
-    // 重试待同步记录（含墓碑删除重试）
-    try { await SyncManager.retryPendingSync(); } catch (e) { console.warn('重试同步失败: ', e); }
+    // v1.6.1: 检查数据库状态后再决定是否同步
+    var dbState = null;
+    try { dbState = await SyncManager.checkDbState(); } catch (e) { dbState = 'network_error'; }
+    updateSyncStatus(dbState);
+
+    if (dbState === 'ready') {
+      // 数据库完全就绪：执行完整同步
+      await syncHistoryFromCloud();
+      try { await SyncManager.retryPendingSync(); } catch (e) { console.warn('重试同步失败: ', e); }
+    } else if (dbState === 'constraint_not_ready' || dbState === 'migration_required') {
+      // schema 存在但约束/迁移未完成：只拉取云端记录，不写入
+      console.warn('数据库状态: ' + dbState + '，仅拉取云端记录，不执行写入同步');
+      try { await syncHistoryFromCloud(true); } catch (e) { console.warn('拉取历史记录失败: ', e); }
+    } else {
+      // schema 未就绪或网络错误：不执行云端同步
+      console.warn('数据库状态: ' + dbState + '，跳过云同步，本地历史正常使用');
+    }
   }
 }
 
-async function syncHistoryFromCloud() {
+// readOnly = true 时只拉取云端记录合并到本地，不向上行写入
+async function syncHistoryFromCloud(readOnly) {
   if (!SyncManager.isEnabled()) return;
   try {
     const cloudRecords = await SyncManager.pullHistory();
@@ -1910,18 +1925,16 @@ async function syncHistoryFromCloud() {
       var localRecord = crUid ? localByRecordUid[crUid] : null;
 
       if (cr._cloudIsDeleted === true) {
-        // 云端墓碑：标记本地记录为已删除
         if (localRecord && !localRecord._isDeleted) {
           localRecord._isDeleted = true;
           localRecord._deletedAt = cr._cloudUpdatedAt || new Date().toISOString();
-          localRecord._deletePending = false; // 云端已删除
+          localRecord._deletePending = false;
           needSave = true;
         }
         continue;
       }
 
       if (!localRecord) {
-        // 本地没有：从云端插入
         var newRec = { ...cr };
         delete newRec._cloudIsDeleted;
         newRec._cloudUpdatedAt = cr._cloudUpdatedAt;
@@ -1933,46 +1946,54 @@ async function syncHistoryFromCloud() {
 
       // 本地有对应记录
       if (!localRecord._syncPending) {
-        // 本地无未同步修改：云端覆盖本地
         Object.assign(localRecord, cr);
         delete localRecord._cloudIsDeleted;
         localRecord._cloudUpdatedAt = cr._cloudUpdatedAt;
         needSave = true;
       } else {
-        // 本地有未同步修改：检查冲突
         if (localRecord._cloudUpdatedAt && cr._cloudUpdatedAt &&
             localRecord._cloudUpdatedAt !== cr._cloudUpdatedAt) {
-          // 云端已被其他设备修改 → 冲突
           localRecord._syncConflict = true;
           needSave = true;
         }
-        // 如果 _cloudUpdatedAt 一致，说明云端未被修改，可安全上传（retryPendingSync 会处理）
       }
     }
 
-    // 上传本地有但云端没有的记录
-    for (var i = 0; i < localHistory.length; i++) {
-      var rec = localHistory[i];
-      if (rec._isDeleted) continue;
-      if (!rec.recordUid || cloudRecordUids.has(rec.recordUid)) continue;
-      if (!rec._syncId) {
-        try {
-          var result = await SyncManager.upsertHistory(rec);
-          if (result) {
-            rec._syncId = result.syncId;
-            rec._cloudUpdatedAt = result.cloudUpdatedAt;
-            rec._syncPending = false;
+    // 上传本地有但云端没有的记录（仅在非 readOnly 模式下）
+    if (!readOnly) {
+      for (var i = 0; i < localHistory.length; i++) {
+        var rec = localHistory[i];
+        if (rec._isDeleted) continue;
+        if (!rec.recordUid || cloudRecordUids.has(rec.recordUid)) continue;
+        if (!rec._syncId) {
+          try {
+            var result = await SyncManager.upsertHistory(rec);
+            if (result) {
+              rec._syncId = result.syncId;
+              rec._cloudUpdatedAt = result.cloudUpdatedAt;
+              rec._syncPending = false;
+              needSave = true;
+            }
+          } catch (e) {
+            console.warn('上传本地记录失败: ', e);
+            rec._syncPending = true;
             needSave = true;
           }
-        } catch (e) {
-          console.warn('上传本地记录失败: ', e);
+        }
+      }
+    } else {
+      // readOnly 模式：标记未同步的记录
+      for (var i = 0; i < localHistory.length; i++) {
+        var rec = localHistory[i];
+        if (rec._isDeleted) continue;
+        if (!rec.recordUid || cloudRecordUids.has(rec.recordUid)) continue;
+        if (!rec._syncId) {
           rec._syncPending = true;
           needSave = true;
         }
       }
     }
 
-    // 按 createdAt 降序排列
     localHistory.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
     if (localHistory.length > 500) localHistory.length = 500;
     if (needSave) {
@@ -2003,10 +2024,24 @@ function initSyncSettings() {
       Store.saveSyncConfig({ url, anonKey, syncKey });
       await SyncManager.configure(url, anonKey, syncKey);
       updateSyncStatus();
-      showToast('同步设置已保存，正在同步...', 'success');
-      await syncHistoryFromCloud();
-      try { await SyncManager.retryPendingSync(); } catch (e) { console.warn('重试同步失败: ', e); }
-      showToast('同步完成', 'success');
+      // v1.6.1: 保存后检查数据库状态
+      var dbState = null;
+      try { dbState = await SyncManager.checkDbState(); } catch (e) { dbState = 'network_error'; }
+      updateSyncStatus(dbState);
+      if (dbState === 'ready') {
+        showToast('同步设置已保存，正在同步...', 'success');
+        await syncHistoryFromCloud();
+        try { await SyncManager.retryPendingSync(); } catch (e) { console.warn('重试同步失败: ', e); }
+        showToast('同步完成', 'success');
+      } else if (dbState === 'schema_not_ready') {
+        showToast('同步已保存，但 Supabase 数据库尚未完成阶段A升级。本地历史正常使用，待数据库升级后自动同步', 'warning');
+      } else if (dbState === 'migration_required') {
+        showToast('同步已保存，但数据库存在未迁移的记录。请在设置页执行数据迁移', 'warning');
+      } else if (dbState === 'constraint_not_ready') {
+        showToast('同步已保存，但唯一约束尚未建立。请先完成数据迁移和阶段B SQL', 'warning');
+      } else {
+        showToast('同步已保存，但数据库连接异常 (' + dbState + ')。本地历史正常使用', 'warning');
+      }
     } else if (!url && !anonKey && !syncKey) {
       Store.saveSyncConfig({ url: '', anonKey: '', syncKey: '' });
       await SyncManager.configure('', '', '');
@@ -2040,14 +2075,18 @@ function initSyncSettings() {
       const report = await SyncManager.migrateHistoryData({ preview: true });
       if (report.success) {
         var lines = [];
+        if (report.dbState) lines.push('数据库状态: <strong>' + report.dbState + '</strong>');
         lines.push('本地记录: ' + report.localTotal + ' 条');
         if (report.localMissingRecordUid > 0) lines.push('需补全 recordUid: ' + report.localMissingRecordUid + ' 条');
         if (report.localMissingUpdatedAt > 0) lines.push('需补全 updatedAt: ' + report.localMissingUpdatedAt + ' 条');
         lines.push('云端记录: ' + report.cloudTotal + ' 条');
         if (report.cloudMissingRecordUid > 0) lines.push('云端缺 record_uid: ' + report.cloudMissingRecordUid + ' 条');
         lines.push('已匹配: ' + report.matched + ' 条');
-        if (report.cloudDuplicates > 0) lines.push('云端重复组: ' + report.cloudDuplicates + ' 组（需删除 ' + report.cloudToDelete + ' 条）');
-        if (report.localToPush > 0) lines.push('需上传本地未匹配: ' + report.localToPush + ' 条');
+        if (report.cloudDuplicates > 0) lines.push('已有 record_uid 重复组: ' + report.cloudDuplicates + ' 组（需删除 ' + report.cloudToDelete + ' 条）');
+        if (report.cloudOldDuplicates > 0) lines.push('旧版 taskId 重复组: ' + report.cloudOldDuplicates + ' 组（需删除 ' + report.cloudOldDupToDelete + ' 条）');
+        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">不确定内容重复: ' + report.uncertainMatches + ' 条（不自动删除）</span>');
+        if (report.pendingUpload > 0) lines.push('<span style="color:#3a8aff;">待阶段B约束完成后上传: ' + report.pendingUpload + ' 条</span>');
+        lines.push('<strong>迁移后预计 record_uid 为空: ' + report.nullRecordUidAfter + ' 条</strong>');
         if (report.errors.length > 0) lines.push('错误: ' + report.errors.length + ' 条');
         statusEl.innerHTML = lines.join('<br>') + '<br><span style="color:var(--text-muted);font-size:12px;">预览完成，确认无误后点击执行迁移</span>';
         document.getElementById('btnMigrateExecute').disabled = false;
@@ -2080,8 +2119,15 @@ function initSyncSettings() {
         lines.push('本地: ' + report.localTotal + ' 条');
         lines.push('云端: ' + report.cloudTotal + ' 条');
         lines.push('匹配: ' + report.matched + ' 条');
-        if (report.cloudToDelete > 0) lines.push('删除重复: ' + report.cloudToDelete + ' 条');
-        if (report.localToPush > 0) lines.push('上传未匹配: ' + report.localToPush + ' 条');
+        if (report.cloudToDelete > 0) lines.push('删除已有 record_uid 重复: ' + report.cloudToDelete + ' 条');
+        if (report.cloudOldDupToDelete > 0) lines.push('删除旧版 taskId 重复: ' + report.cloudOldDupToDelete + ' 条');
+        if (report.pendingUpload > 0) lines.push('<span style="color:#3a8aff;">待阶段B约束完成后上传: ' + report.pendingUpload + ' 条</span>');
+        lines.push('<strong>迁移后预计 record_uid 为空: ' + report.nullRecordUidAfter + ' 条</strong>');
+        if (report.nullRecordUidAfter === 0) {
+          lines.push('<span style="color:#00d4aa;">可以执行阶段B SQL（NOT NULL + UNIQUE 约束）</span>');
+        } else {
+          lines.push('<span style="color:#ffb443;">仍有 ' + report.nullRecordUidAfter + ' 条空记录，需检查后再执行阶段B SQL</span>');
+        }
         if (report.errors.length > 0) {
           lines.push('<span style="color:#ffb443;">错误: ' + report.errors.length + ' 条</span>');
           for (var i = 0; i < Math.min(report.errors.length, 5); i++) {
@@ -2090,6 +2136,11 @@ function initSyncSettings() {
         }
         statusEl.innerHTML = lines.join('<br>');
         showToast('迁移完成', 'success');
+        // v1.6.1: 清除数据库状态缓存并刷新显示
+        SyncManager.clearDbStateCache();
+        var newDbState = null;
+        try { newDbState = await SyncManager.checkDbState(); } catch (e) { newDbState = 'network_error'; }
+        updateSyncStatus(newDbState);
         // 刷新历史列表
         window._historyRendered = false;
         if (document.getElementById('page-history')?.classList.contains('active')) {
@@ -2112,13 +2163,35 @@ function initSyncSettings() {
   };
 }
 
-function updateSyncStatus() {
+function updateSyncStatus(dbState) {
   const el = document.getElementById('syncStatus');
   if (!el) return;
   const migSection = document.getElementById('migrationSection');
   if (SyncManager.isEnabled()) {
-    el.textContent = '同步已开启';
-    el.style.color = '#00d4aa';
+    var stateText = '';
+    var stateColor = '#00d4aa';
+    if (!dbState) {
+      // 未传入状态，尝试从缓存读取
+      dbState = SyncManager._dbState;
+    }
+    if (dbState === 'schema_not_ready') {
+      stateText = '（数据库未升级）';
+      stateColor = '#ff4d6d';
+    } else if (dbState === 'migration_required') {
+      stateText = '（待数据迁移）';
+      stateColor = '#ffb443';
+    } else if (dbState === 'constraint_not_ready') {
+      stateText = '（待建立唯一约束）';
+      stateColor = '#ffb443';
+    } else if (dbState === 'ready') {
+      stateText = '';
+      stateColor = '#00d4aa';
+    } else if (dbState === 'network_error') {
+      stateText = '（数据库连接异常）';
+      stateColor = '#ff4d6d';
+    }
+    el.textContent = '同步已开启' + stateText;
+    el.style.color = stateColor;
     if (migSection) migSection.style.display = 'block';
   } else {
     el.textContent = '同步未开启';
