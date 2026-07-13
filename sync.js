@@ -78,64 +78,60 @@ const SyncManager = {
     return !!(this._url && this._anonKey && this._syncKey);
   },
 
-  // 检查数据库 schema 是否有新字段
-  // 通过查询一条记录看返回字段来判断（不依赖 information_schema）
+  // 检查数据库 schema 是否有新字段（只读，无副作用）
   async checkDbSchema() {
     if (!this.isEnabled()) return 'schema_not_ready';
     try {
-      // 尝试查询一条记录，select 只取新字段
-      // 如果字段不存在，PostgREST 会返回 400 错误
-      var res = await fetch(this._url + '/rest/v1/history?user_id=eq.' + encodeURIComponent(this._userId) + '&select=record_uid,updated_at,is_deleted,deleted_at&limit=1', {
+      // 只读查询：select 只取新字段，limit=0 不返回任何行
+      // 如果字段不存在，PostgREST 返回 400
+      var res = await fetch(this._url + '/rest/v1/history?user_id=eq.' + encodeURIComponent(this._userId) + '&select=record_uid,updated_at,is_deleted,deleted_at&limit=0', {
         headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey }
       });
       if (res.ok) return 'schema_ok';
       if (res.status === 400) {
-        // 字段不存在
-        var body = await res.text();
-        if (body.includes('record_uid') || body.includes('column') || body.includes('Could not find')) {
-          return 'schema_not_ready';
-        }
         return 'schema_not_ready';
       }
-      if (res.status === 401) return 'auth_error';
+      if (res.status === 401 || res.status === 403) return 'auth_error';
       return 'schema_not_ready';
     } catch (e) {
       return 'network_error';
     }
   },
 
-  // 检查唯一约束是否存在
-  // 通过尝试一个不产生副作用的 upsert（insert only，如果约束不存在会创建重复行而不是报错）
-  // 更安全的方式：检查 information_schema（需要更高权限）
-  // 实际方案：在 checkDbState 中综合判断
-  async checkUniqueConstraint() {
-    if (!this.isEnabled()) return false;
+  // v1.6.2: 无副作用的约束检查
+  // 通过只读 RPC get_history_sync_constraints() 获取 NOT NULL 和 UNIQUE 约束状态
+  // RPC 不存在时 fallback 到 checkDbSchema 返回的字段状态
+  async checkConstraintsViaRpc() {
+    if (!this.isEnabled()) return { recordUidNotNull: false, uniqueConstraintReady: false, rpcAvailable: false };
     try {
-      // 查询 information_schema.table_constraints
-      var res = await fetch(this._url + '/rest/v1/information_schema?select=table_constraints!inner&limit=0', {
-        headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey }
+      var res = await fetch(this._url + '/rest/v1/rpc/get_history_sync_constraints', {
+        method: 'POST',
+        headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey, 'Content-Type': 'application/json' },
+        body: '{}'
       });
-      // information_schema 可能无法通过 REST API 访问
-      // 更好的方案：尝试一个带 on_conflict 的 HEAD 请求
-      // 实际上 PostgREST 在约束不存在时使用 on_conflict 会返回 400
-      // 用一个测试请求：HEAD 请求带 on_conflict 参数
-      var testRes = await fetch(this._url + '/rest/v1/history?on_conflict=user_id,record_uid&limit=0', {
-        headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey, 'Prefer': 'count=exact' },
-        method: 'HEAD'
-      });
-      // PostgREST 对 HEAD+on_conflict 的处理：
-      // 如果约束不存在，HEAD 请求不会报错（因为不实际 upsert）
-      // 所以我们换一个方案：实际 upsert 一条测试记录
-      // 但这有副作用...
-      // 最终方案：用 _dbStateConfigured 标记，由用户在迁移完成后手动确认
-      return null; // 返回 null 表示无法自动检测
+      if (res.status === 404) {
+        // RPC 函数不存在 → 用户尚未执行阶段A SQL 中的 RPC 部分
+        return { recordUidNotNull: false, uniqueConstraintReady: false, rpcAvailable: false };
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { recordUidNotNull: false, uniqueConstraintReady: false, rpcAvailable: false, authError: true };
+      }
+      if (!res.ok) {
+        return { recordUidNotNull: false, uniqueConstraintReady: false, rpcAvailable: false };
+      }
+      var data = await res.json();
+      return {
+        recordUidNotNull: !!(data && data.record_uid_not_null),
+        uniqueConstraintReady: !!(data && data.unique_constraint_ready),
+        rpcAvailable: true
+      };
     } catch (e) {
-      return null;
+      return { recordUidNotNull: false, uniqueConstraintReady: false, rpcAvailable: false, networkError: true };
     }
   },
 
-  // 综合检查数据库状态
-  // 返回: 'schema_not_ready' | 'migration_required' | 'constraint_not_ready' | 'ready' | 'network_error'
+  // v1.6.2: 综合检查数据库状态（完全无副作用）
+  // 返回: 'schema_not_ready' | 'auth_error' | 'network_error' | 'migration_required' | 'constraint_not_ready' | 'ready'
   async checkDbState() {
     if (!this.isEnabled()) return 'schema_not_ready';
 
@@ -145,90 +141,97 @@ const SyncManager = {
       return this._dbState;
     }
 
-    // Step 1: 检查字段是否存在
-    var schemaStatus = await this.checkDbSchema();
-    if (schemaStatus === 'schema_not_ready' || schemaStatus === 'network_error') {
-      this._dbState = schemaStatus;
-      this._dbStateCheckedAt = now;
-      return this._dbState;
-    }
+    var result = 'schema_not_ready';
 
-    // Step 2: 检查是否有 record_uid 为空的记录（迁移未完成）
     try {
-      var res = await fetch(this._url + '/rest/v1/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=is.null&select=id&limit=1', {
+      // Step 1: 检查字段是否存在（只读查询，limit=0）
+      var schemaStatus = await this.checkDbSchema();
+      if (schemaStatus === 'schema_not_ready') {
+        result = 'schema_not_ready';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+      if (schemaStatus === 'auth_error') {
+        result = 'auth_error';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+      if (schemaStatus === 'network_error') {
+        result = 'network_error';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+      // schemaStatus === 'schema_ok' → 继续
+
+      // Step 2: 检查是否有 record_uid 为空的记录（只读查询）
+      var nullRes = await fetch(this._url + '/rest/v1/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=is.null&select=id&limit=1', {
         headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey }
       });
-      if (res.ok) {
-        var rows = await res.json();
-        if (rows && rows.length > 0) {
+      if (nullRes.status === 401 || nullRes.status === 403) {
+        result = 'auth_error';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+      if (nullRes.ok) {
+        var nullRows = await nullRes.json();
+        if (nullRows && nullRows.length > 0) {
           // 有空 record_uid 的记录 → 迁移未完成
-          this._dbState = 'migration_required';
+          result = 'migration_required';
+          this._dbState = result;
           this._dbStateCheckedAt = now;
-          return this._dbState;
+          return result;
         }
       }
-    } catch (e) {
-      // 查询失败，保守处理
-    }
 
-    // Step 3: 检查唯一约束是否存在
-    // 用一个安全的测试：发一个带 on_conflict 的 POST 请求到一个不存在的 record_uid
-    // 如果约束不存在，PostgREST 会忽略 on_conflict 并创建一条新记录
-    // 如果约束存在，PostgREST 会执行 upsert（更新而非插入）
-    // 但这有副作用，所以用一个只读的替代方案：
-    // 尝试带 on_conflict 的 HEAD 请求，看 PostgREST 是否返回错误
-    try {
-      // 实际上 PostgREST 在 on_conflict 引用不存在的约束时，对 GET/HEAD 请求不会报错
-      // 只有在实际 POST 时才会报错
-      // 所以我们只能标记为 constraint_not_ready，让用户手动确认
-      // 但如果用户已经执行了阶段B SQL，我们可以通过检查 NOT NULL 约束间接判断
-      // 检查 record_uid 是否 NOT NULL：尝试插入一条 record_uid=null 的记录
-      // 如果 NOT NULL 约束存在，会报错
-      var testRes = await fetch(this._url + '/rest/v1/history', {
-        method: 'POST',
-        headers: {
-          'apikey': this._anonKey,
-          'Authorization': 'Bearer ' + this._anonKey,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify({
-          user_id: '__constraint_test__',
-          encrypted_data: 'test',
-          iv: 'test',
-          record_uid: null
-        })
-      });
-      if (testRes.status === 201 || testRes.ok) {
-        // 插入成功 → record_uid 可以为 null → NOT NULL 约束不存在 → 阶段B未完成
-        // 清理测试数据
-        try {
-          await fetch(this._url + '/rest/v1/history?user_id=eq.__constraint_test__', {
-            method: 'DELETE',
-            headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey }
-          });
-        } catch (e) {}
-        this._dbState = 'constraint_not_ready';
+      // Step 3: 通过只读 RPC 检查 NOT NULL 和 UNIQUE 约束
+      var constraints = await this.checkConstraintsViaRpc();
+      if (constraints.authError) {
+        result = 'auth_error';
+        this._dbState = result;
         this._dbStateCheckedAt = now;
-        return this._dbState;
-      } else {
-        // 插入失败（可能是 NOT NULL 约束导致 400/23502）
-        var errBody = await testRes.text();
-        if (errBody.includes('not-null') || errBody.includes('23502') || errBody.includes('record_uid')) {
-          // NOT NULL 约束存在 → 唯一约束可能也已建立
-          this._dbState = 'ready';
-          this._dbStateCheckedAt = now;
-          return this._dbState;
-        }
-        // 其他错误，保守标记
-        this._dbState = 'constraint_not_ready';
-        this._dbStateCheckedAt = now;
-        return this._dbState;
+        return result;
       }
-    } catch (e) {
-      this._dbState = 'constraint_not_ready';
+      if (constraints.networkError) {
+        result = 'network_error';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+
+      if (!constraints.rpcAvailable) {
+        // RPC 不存在 → 用户未执行含 RPC 的阶段A SQL
+        // 字段存在但无法确认约束 → 保守标记
+        result = 'constraint_not_ready';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+
+      // RPC 可用，检查约束状态
+      if (!constraints.recordUidNotNull || !constraints.uniqueConstraintReady) {
+        // NOT NULL 或 UNIQUE 约束未全部建立
+        result = 'constraint_not_ready';
+        this._dbState = result;
+        this._dbStateCheckedAt = now;
+        return result;
+      }
+
+      // 所有条件满足
+      result = 'ready';
+      this._dbState = result;
       this._dbStateCheckedAt = now;
-      return this._dbState;
+      return result;
+
+    } catch (e) {
+      // 网络异常
+      result = 'network_error';
+      this._dbState = result;
+      this._dbStateCheckedAt = now;
+      return result;
     }
   },
 
@@ -404,7 +407,23 @@ const SyncManager = {
     return true;
   },
 
+  // v1.6.2: 查询当前用户云端实际 record_uid 为空的数量（只读）
+  async countNullRecordUid() {
+    if (!this.isEnabled()) return -1;
+    try {
+      var res = await fetch(this._url + '/rest/v1/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=is.null&select=id&limit=1000', {
+        headers: { 'apikey': this._anonKey, 'Authorization': 'Bearer ' + this._anonKey }
+      });
+      if (!res.ok) return -1;
+      var rows = await res.json();
+      return rows ? rows.length : 0;
+    } catch (e) {
+      return -1;
+    }
+  },
+
   // 数据迁移（预览 / 执行）
+  // v1.6.2: 拆分预测/成功/失败计数；执行后重新查询实际空值
   // options.preview = true 时只返回报告不修改数据
   async migrateHistoryData(options) {
     if (!this.isEnabled()) return { error: '同步未启用' };
@@ -416,19 +435,27 @@ const SyncManager = {
       localMissingUpdatedAt: 0,
       cloudTotal: 0,
       cloudMissingRecordUid: 0,
-      matched: 0,
       cloudDuplicates: 0,
       cloudToDelete: 0,
-      localToPush: 0,
-      cloudOldDuplicates: 0,       // 旧版重复（record_uid 为空，按 taskId 分组）
-      cloudOldDupToDelete: 0,     // 旧版重复待删除
-      uncertainMatches: 0,        // 不确定匹配数量
-      pendingUpload: 0,           // 阶段B约束完成后待上传
-      nullRecordUidAfter: 0,      // 迁移后预计仍为空的 record_uid 数量
-      dbState: null,              // 当前数据库状态
+      cloudOldDuplicates: 0,
+      cloudOldDupToDelete: 0,
+      uncertainMatches: 0,
+      pendingUpload: 0,
+      nullRecordUidAfter: 0,       // 迁移后预计仍为空的 record_uid 数量
+      actualNullRecordUid: -1,    // v1.6.2: 执行后实际查询的空值数量（-1=未查询/预览模式）
+      dbState: null,
       preview: preview,
       steps: [],
-      errors: []
+      errors: [],
+      // v1.6.2: 拆分统计
+      existingUidMatched: 0,       // 原本已有 record_uid 的匹配
+      predictedNullUidPatch: 0,   // 预计需要 PATCH record_uid 的数量
+      successfulNullUidPatch: 0,   // PATCH record_uid 成功
+      failedNullUidPatch: 0,       // PATCH record_uid 失败
+      predictedDuplicateDelete: 0, // 预计需要删除的重复数量
+      successfulDuplicateDelete: 0,// 删除重复成功
+      failedDuplicateDelete: 0,    // 删除重复失败
+      uncertainDetails: []         // v1.6.2: 冲突记录详情（模型、提示词摘要、时间、候选数）
     };
 
     try {
@@ -448,7 +475,7 @@ const SyncManager = {
       report.localTotal = localHistory.length;
       report.steps.push('拉取本地记录 ' + localHistory.length + ' 条');
 
-      // Step 2: 补本地 recordUid 和 updatedAt（统一使用 crypto.randomUUID，不降级）
+      // Step 2: 补本地 recordUid 和 updatedAt
       var needSave = false;
       for (var i = 0; i < localHistory.length; i++) {
         var rec = localHistory[i];
@@ -508,6 +535,7 @@ const SyncManager = {
           for (var j = 1; j < group.length; j++) {
             duplicatesToDelete.push(group[j]);
             report.cloudToDelete++;
+            report.predictedDuplicateDelete++;
           }
         }
       }
@@ -517,8 +545,8 @@ const SyncManager = {
 
       // Step 4b: 检测旧版重复（record_uid 为空，按 taskId 分组去重）
       var oldDupToDelete = [];
-      var cloudByTaskId = {}; // taskId → [rows]
-      var cloudNoTaskId = []; // 无 taskId 的空 record_uid 行
+      var cloudByTaskId = {};
+      var cloudNoTaskId = [];
 
       for (var ci = 0; ci < cloudWithoutRecordUid.length; ci++) {
         var crow = cloudWithoutRecordUid[ci];
@@ -537,7 +565,6 @@ const SyncManager = {
         }
       }
 
-      // 同一 taskId 有多条 → 保留最新，其余列入删除
       for (var tid in cloudByTaskId) {
         var tidGroup = cloudByTaskId[tid];
         if (tidGroup.length > 1) {
@@ -548,6 +575,7 @@ const SyncManager = {
           for (var j = 1; j < tidGroup.length; j++) {
             oldDupToDelete.push(tidGroup[j]);
             report.cloudOldDupToDelete++;
+            report.predictedDuplicateDelete++;
           }
         }
       }
@@ -555,80 +583,60 @@ const SyncManager = {
         report.steps.push('检测到旧版 taskId 重复 ' + report.cloudOldDuplicates + ' 组，需删除 ' + report.cloudOldDupToDelete + ' 条');
       }
 
-      // Step 4c: 无 taskId 的图片记录按 model+prompt+result 匹配（不确定匹配）
-      // 只统计不自动删除
+      // Step 4c: v1.6.2 收紧无 taskId 图片记录匹配
+      // 保守匹配：type+model+prompt+result完全一致+createdAt时间差60秒内+候选恰好1条
+      // 先按 (type+model+prompt+resultJSON) 分组检测冲突
       var contentGroups = {};
       for (var ni = 0; ni < cloudNoTaskId.length; ni++) {
         var nrow = cloudNoTaskId[ni];
         var nRec = nrow._decrypted;
         if (!nRec) continue;
-        var key = (nRec.model || '') + '|' + (nRec.prompt || '') + '|' + JSON.stringify(nRec.result || []);
+        var key = (nRec.type || '') + '|' + (nRec.model || '') + '|' + (nRec.prompt || '') + '|' + JSON.stringify(nRec.result || []);
         if (!contentGroups[key]) contentGroups[key] = [];
         contentGroups[key].push(nrow);
       }
       for (var ck in contentGroups) {
         if (contentGroups[ck].length > 1) {
-          report.uncertainMatches += contentGroups[ck].length - 1;
+          report.uncertainMatches += contentGroups[ck].length;
+          // 记录冲突详情
+          for (var di = 0; di < contentGroups[ck].length; di++) {
+            var dRec = contentGroups[ck][di]._decrypted;
+            report.uncertainDetails.push({
+              model: (dRec && dRec.model) || '',
+              prompt: (dRec && dRec.prompt) ? dRec.prompt.substring(0, 80) : '',
+              createdAt: (dRec && dRec.createdAt) || '',
+              candidates: contentGroups[ck].length
+            });
+          }
         }
       }
       if (report.uncertainMatches > 0) {
-        report.steps.push('检测到 ' + report.uncertainMatches + ' 条不确定的内容重复（不会自动删除）');
+        report.steps.push('检测到 ' + report.uncertainMatches + ' 条多候选内容冲突（不自动匹配、不自动删除）');
       }
 
       // Step 5: 匹配本地与云端
-      var matchedCount = 0;
       var localMatched = new Set();
       var cloudMatched = new Set();
 
-      // 5a. 按 recordUid 匹配
+      // 5a. 按 recordUid 匹配（原本已有 record_uid）
       for (var i = 0; i < localHistory.length; i++) {
         var rec = localHistory[i];
         if (!rec.recordUid) continue;
         if (cloudByRecordUid[rec.recordUid]) {
           var cloudRow = cloudByRecordUid[rec.recordUid][0];
-          if (rec._syncId !== cloudRow.id) {
-            if (!preview) {
+          if (!preview) {
+            if (rec._syncId !== cloudRow.id) {
               rec._syncId = cloudRow.id;
             }
           }
           localMatched.add(i);
           cloudMatched.add(cloudRow.id);
-          matchedCount++;
+          report.existingUidMatched++;
         }
       }
 
-      // 5b. 无 recordUid 的云端行，按 taskId 匹配（跳过旧版重复中已标记删除的行）
+      // 5b. 无 recordUid 的云端行，按 taskId 匹配
       var oldDupIds = new Set(oldDupToDelete.map(function(r) { return r.id; }));
-      for (var ci = 0; ci < cloudWithoutRecordUid.length; ci++) {
-        var crow = cloudWithoutRecordUid[ci];
-        if (cloudMatched.has(crow.id)) continue;
-        if (oldDupIds.has(crow.id)) continue; // 跳过已标记删除的重复
-        var cRec = crow._decrypted;
-        if (!cRec) {
-          try { cRec = await decryptObj(this._syncKey, crow.encrypted_data, crow.iv); } catch (e) { continue; }
-        }
-        if (cRec.taskId) {
-          for (var i = 0; i < localHistory.length; i++) {
-            if (localMatched.has(i)) continue;
-            if (localHistory[i].taskId === cRec.taskId) {
-              if (!preview) {
-                try {
-                  await this.patchRecordUid(crow.id, localHistory[i].recordUid);
-                  localHistory[i]._syncId = crow.id;
-                } catch (e) {
-                  report.errors.push('PATCH record_uid 失败 (cloudId=' + crow.id + '): ' + e.message);
-                }
-              }
-              localMatched.add(i);
-              cloudMatched.add(crow.id);
-              matchedCount++;
-              break;
-            }
-          }
-        }
-      }
-
-      // 5c. 仍无 recordUid 且无 taskId 的云端行，按内容匹配
       for (var ci = 0; ci < cloudWithoutRecordUid.length; ci++) {
         var crow = cloudWithoutRecordUid[ci];
         if (cloudMatched.has(crow.id)) continue;
@@ -637,51 +645,124 @@ const SyncManager = {
         if (!cRec) {
           try { cRec = await decryptObj(this._syncKey, crow.encrypted_data, crow.iv); } catch (e) { continue; }
         }
+        if (cRec.taskId) {
+          for (var i = 0; i < localHistory.length; i++) {
+            if (localMatched.has(i)) continue;
+            if (localHistory[i].taskId === cRec.taskId) {
+              report.predictedNullUidPatch++;
+              if (!preview) {
+                try {
+                  await this.patchRecordUid(crow.id, localHistory[i].recordUid);
+                  localHistory[i]._syncId = crow.id;
+                  report.successfulNullUidPatch++;
+                } catch (e) {
+                  report.failedNullUidPatch++;
+                  report.errors.push('PATCH record_uid 失败 (cloudId=' + crow.id + '): ' + e.message);
+                  // PATCH 失败：不标记匹配，不写 _syncId
+                  continue;
+                }
+              } else {
+                report.successfulNullUidPatch++;
+              }
+              localMatched.add(i);
+              cloudMatched.add(crow.id);
+              break;
+            }
+          }
+        }
+      }
+
+      // 5c. v1.6.2 收紧无 taskId 图片记录匹配
+      // 保守策略：type均为image + model完全一致 + prompt完全一致 + result URL数组完全一致
+      // + createdAt时间差60秒内 + 候选恰好1条
+      for (var ci = 0; ci < cloudWithoutRecordUid.length; ci++) {
+        var crow = cloudWithoutRecordUid[ci];
+        if (cloudMatched.has(crow.id)) continue;
+        if (oldDupIds.has(crow.id)) continue;
+        var cRec = crow._decrypted;
+        if (!cRec) {
+          try { cRec = await decryptObj(this._syncKey, crow.encrypted_data, crow.iv); } catch (e) { continue; }
+        }
+        // 只处理图片记录
+        if (!cRec || cRec.type !== 'image') continue;
+        if (!cRec.prompt || !cRec.result || !cRec.model) continue;
+
+        // 查找候选匹配
+        var candidates = [];
         for (var i = 0; i < localHistory.length; i++) {
           if (localMatched.has(i)) continue;
           var lRec = localHistory[i];
-          if (cRec.prompt && lRec.prompt && cRec.prompt === lRec.prompt
-              && cRec.result && lRec.result
-              && JSON.stringify(cRec.result) === JSON.stringify(lRec.result)) {
-            if (!preview) {
-              try {
-                await this.patchRecordUid(crow.id, lRec.recordUid);
-                lRec._syncId = crow.id;
-              } catch (e) {
-                report.errors.push('PATCH record_uid 失败 (content match): ' + e.message);
-              }
-            }
-            localMatched.add(i);
-            cloudMatched.add(crow.id);
-            matchedCount++;
-            break;
-          }
+          if (lRec.type !== 'image') continue;
+          if (!lRec.prompt || !lRec.result || !lRec.model) continue;
+          // model 完全一致
+          if (cRec.model !== lRec.model) continue;
+          // prompt 完全一致
+          if (cRec.prompt !== lRec.prompt) continue;
+          // result URL 数组完全一致
+          if (JSON.stringify(cRec.result) !== JSON.stringify(lRec.result)) continue;
+          // createdAt 时间差 60 秒内
+          var cTime = cRec.createdAt ? new Date(cRec.createdAt).getTime() : 0;
+          var lTime = lRec.createdAt ? new Date(lRec.createdAt).getTime() : 0;
+          if (!cTime || !lTime) continue; // 缺少时间字段不匹配
+          if (Math.abs(cTime - lTime) > 60000) continue;
+          candidates.push(i);
         }
+
+        if (candidates.length === 1) {
+          // 恰好 1 条候选：允许匹配
+          var matchIdx = candidates[0];
+          report.predictedNullUidPatch++;
+          if (!preview) {
+            try {
+              await this.patchRecordUid(crow.id, localHistory[matchIdx].recordUid);
+              localHistory[matchIdx]._syncId = crow.id;
+              report.successfulNullUidPatch++;
+            } catch (e) {
+              report.failedNullUidPatch++;
+              report.errors.push('PATCH record_uid 失败 (image match): ' + e.message);
+              continue;
+            }
+          } else {
+            report.successfulNullUidPatch++;
+          }
+          localMatched.add(matchIdx);
+          cloudMatched.add(crow.id);
+        } else if (candidates.length > 1) {
+          // 多于 1 条候选：列入 uncertainMatches，不自动 PATCH
+          report.uncertainMatches++;
+          report.uncertainDetails.push({
+            model: cRec.model,
+            prompt: cRec.prompt.substring(0, 80),
+            createdAt: cRec.createdAt || '',
+            candidates: candidates.length
+          });
+        }
+        // candidates.length === 0：保持未匹配
       }
 
-      report.matched = matchedCount;
-      report.steps.push('匹配本地与云端 ' + matchedCount + ' 条');
+      report.steps.push('已有 record_uid 匹配: ' + report.existingUidMatched + ' 条');
+      report.steps.push('预计 PATCH record_uid: ' + report.predictedNullUidPatch + ' 条（成功 ' + report.successfulNullUidPatch + '，失败 ' + report.failedNullUidPatch + '）');
 
-      // Step 6: 删除云端重复记录（已有 record_uid 的重复 + 旧版 taskId 重复）
+      // Step 6: 删除云端重复记录
       if (!preview) {
         var allToDelete = duplicatesToDelete.concat(oldDupToDelete);
-        var deleted = 0;
         for (var j = 0; j < allToDelete.length; j++) {
           try {
             await this.deleteCloudRecord(allToDelete[j].id);
-            deleted++;
+            report.successfulDuplicateDelete++;
           } catch (e) {
+            report.failedDuplicateDelete++;
             report.errors.push('删除重复记录失败 (cloudId=' + allToDelete[j].id + '): ' + e.message);
           }
         }
-        if (deleted > 0) {
-          report.steps.push('删除云端重复记录 ' + deleted + ' 条');
+        if (report.successfulDuplicateDelete > 0) {
+          report.steps.push('删除云端重复记录: 成功 ' + report.successfulDuplicateDelete + ' 条，失败 ' + report.failedDuplicateDelete + ' 条');
         }
+      } else {
+        report.steps.push('预计删除重复: ' + report.predictedDuplicateDelete + ' 条');
       }
 
       // Step 7: 统计待上传的本地未匹配记录
-      // v1.6.1 热修复：不在唯一约束建立前调用 upsertHistory
-      // 只统计为 pendingUpload，等阶段B约束完成后由正式同步上传
       var pendingUpload = 0;
       for (var i = 0; i < localHistory.length; i++) {
         if (!localMatched.has(i) && !localHistory[i]._syncId && !localHistory[i]._isDeleted) {
@@ -701,12 +782,24 @@ const SyncManager = {
         await Store.saveHistory(localHistory);
       }
 
-      // 估算迁移后仍为空的 record_uid 数量
-      // = 当前空 record_uid 数量 - 被匹配并补写的数量 - 被删除的重复数量
-      var nullAfter = report.cloudMissingRecordUid - matchedCount - report.cloudToDelete - report.cloudOldDupToDelete;
-      if (nullAfter < 0) nullAfter = 0;
-      report.nullRecordUidAfter = nullAfter;
-      report.steps.push('迁移后预计 record_uid 为空: ' + nullAfter + ' 条');
+      // v1.6.2: 迁移后预计空值数量（仅基于预测，不混入成功/失败）
+      var predictedNullAfter = report.cloudMissingRecordUid
+        - report.successfulNullUidPatch
+        - report.successfulDuplicateDelete;
+      if (predictedNullAfter < 0) predictedNullAfter = 0;
+      report.nullRecordUidAfter = predictedNullAfter;
+      report.steps.push('迁移后预计 record_uid 为空: ' + predictedNullAfter + ' 条');
+
+      // v1.6.2: 执行模式下，重新查询云端实际空值数量
+      if (!preview) {
+        var actualNull = await this.countNullRecordUid();
+        report.actualNullRecordUid = actualNull;
+        if (actualNull >= 0) {
+          report.steps.push('执行后实际查询 record_uid 为空: ' + actualNull + ' 条');
+        } else {
+          report.steps.push('执行后查询实际空值失败（网络错误），请手动检查');
+        }
+      }
 
       report.success = true;
       report.steps.push(preview ? '预览完成（未修改数据）' : '迁移执行完成');

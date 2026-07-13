@@ -1,8 +1,8 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.1';
-const APP_BUILD = '2026-07-12 12:53:00';
+const APP_VERSION = '1.6.2';
+const APP_BUILD = '2026-07-13 13:30:00';
 
 let imgMode = 't2i';
 let vidMode = 't2v'; // t2v / i2v
@@ -481,16 +481,18 @@ async function handleImageGenerate() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { showToast('请输入提示词', 'warning'); return; }
   if ((imgMode === 'i2i' || imgMode === 'fusion') && imgRefImages.length === 0) { showToast('请上传参考图', 'warning'); return; }
-  // 最终兜底校验：参考图数量不超限
-  if ((imgMode === 'i2i' || imgMode === 'fusion') && caps.maxRefImages && imgRefImages.length > caps.maxRefImages) {
-    showToast('参考图最多' + caps.maxRefImages + '张，当前' + imgRefImages.length + '张，请删除多余图片', 'warning');
-    return;
-  }
 
+  // v1.6.2: 先获取 model → mi → caps，再做依赖 caps 的校验
   const model = document.getElementById('imgModel').value;
   const mi = IMAGE_MODELS.find(m => m.id === model);
   if (!mi) return;
   const caps = mi.caps;
+
+  // 最终兜底校验：参考图数量不超限（caps 已定义）
+  if ((imgMode === 'i2i' || imgMode === 'fusion') && caps.maxRefImages && imgRefImages.length > caps.maxRefImages) {
+    showToast('参考图最多' + caps.maxRefImages + '张，当前' + imgRefImages.length + '张，请删除多余图片', 'warning');
+    return;
+  }
 
   const params = {
     mode: imgMode, model, prompt,
@@ -1892,6 +1894,8 @@ async function initSync() {
       // schema 存在但约束/迁移未完成：只拉取云端记录，不写入
       console.warn('数据库状态: ' + dbState + '，仅拉取云端记录，不执行写入同步');
       try { await syncHistoryFromCloud(true); } catch (e) { console.warn('拉取历史记录失败: ', e); }
+    } else if (dbState === 'auth_error') {
+      console.warn('数据库认证失败，跳过云同步');
     } else {
       // schema 未就绪或网络错误：不执行云端同步
       console.warn('数据库状态: ' + dbState + '，跳过云同步，本地历史正常使用');
@@ -2035,6 +2039,10 @@ function initSyncSettings() {
         showToast('同步完成', 'success');
       } else if (dbState === 'schema_not_ready') {
         showToast('同步已保存，但 Supabase 数据库尚未完成阶段A升级。本地历史正常使用，待数据库升级后自动同步', 'warning');
+      } else if (dbState === 'auth_error') {
+        showToast('同步已保存，但认证失败。请检查 Supabase URL 和 Anon Key 是否正确', 'error');
+      } else if (dbState === 'network_error') {
+        showToast('同步已保存，但无法连接到 Supabase。请检查网络和 URL', 'error');
       } else if (dbState === 'migration_required') {
         showToast('同步已保存，但数据库存在未迁移的记录。请在设置页执行数据迁移', 'warning');
       } else if (dbState === 'constraint_not_ready') {
@@ -2081,10 +2089,12 @@ function initSyncSettings() {
         if (report.localMissingUpdatedAt > 0) lines.push('需补全 updatedAt: ' + report.localMissingUpdatedAt + ' 条');
         lines.push('云端记录: ' + report.cloudTotal + ' 条');
         if (report.cloudMissingRecordUid > 0) lines.push('云端缺 record_uid: ' + report.cloudMissingRecordUid + ' 条');
-        lines.push('已匹配: ' + report.matched + ' 条');
+        lines.push('已有 record_uid 匹配: ' + report.existingUidMatched + ' 条');
+        lines.push('预计 PATCH record_uid: ' + report.predictedNullUidPatch + ' 条');
         if (report.cloudDuplicates > 0) lines.push('已有 record_uid 重复组: ' + report.cloudDuplicates + ' 组（需删除 ' + report.cloudToDelete + ' 条）');
         if (report.cloudOldDuplicates > 0) lines.push('旧版 taskId 重复组: ' + report.cloudOldDuplicates + ' 组（需删除 ' + report.cloudOldDupToDelete + ' 条）');
-        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">不确定内容重复: ' + report.uncertainMatches + ' 条（不自动删除）</span>');
+        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">多候选内容冲突: ' + report.uncertainMatches + ' 条（不自动匹配、不自动删除）</span>');
+        if (report.predictedDuplicateDelete > 0) lines.push('预计删除重复: ' + report.predictedDuplicateDelete + ' 条');
         if (report.pendingUpload > 0) lines.push('<span style="color:#3a8aff;">待阶段B约束完成后上传: ' + report.pendingUpload + ' 条</span>');
         lines.push('<strong>迁移后预计 record_uid 为空: ' + report.nullRecordUidAfter + ' 条</strong>');
         if (report.errors.length > 0) lines.push('错误: ' + report.errors.length + ' 条');
@@ -2115,18 +2125,28 @@ function initSyncSettings() {
       const report = await SyncManager.migrateHistoryData({ preview: false });
       if (report.success) {
         var lines = [];
-        lines.push('<span style="color:#00d4aa;font-weight:600;">迁移完成</span>');
+        lines.push('<span style="color:#00d4aa;font-weight:600;">迁移执行完成</span>');
         lines.push('本地: ' + report.localTotal + ' 条');
         lines.push('云端: ' + report.cloudTotal + ' 条');
-        lines.push('匹配: ' + report.matched + ' 条');
-        if (report.cloudToDelete > 0) lines.push('删除已有 record_uid 重复: ' + report.cloudToDelete + ' 条');
-        if (report.cloudOldDupToDelete > 0) lines.push('删除旧版 taskId 重复: ' + report.cloudOldDupToDelete + ' 条');
+        lines.push('已有 record_uid 匹配: ' + report.existingUidMatched + ' 条');
+        lines.push('PATCH record_uid: 预计 ' + report.predictedNullUidPatch + '，成功 ' + report.successfulNullUidPatch + '，失败 ' + report.failedNullUidPatch);
+        if (report.cloudToDelete > 0 || report.cloudOldDupToDelete > 0) {
+          lines.push('删除重复: 预计 ' + report.predictedDuplicateDelete + '，成功 ' + report.successfulDuplicateDelete + '，失败 ' + report.failedDuplicateDelete);
+        }
+        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">多候选内容冲突: ' + report.uncertainMatches + ' 条（未自动处理）</span>');
         if (report.pendingUpload > 0) lines.push('<span style="color:#3a8aff;">待阶段B约束完成后上传: ' + report.pendingUpload + ' 条</span>');
-        lines.push('<strong>迁移后预计 record_uid 为空: ' + report.nullRecordUidAfter + ' 条</strong>');
-        if (report.nullRecordUidAfter === 0) {
-          lines.push('<span style="color:#00d4aa;">可以执行阶段B SQL（NOT NULL + UNIQUE 约束）</span>');
+        lines.push('迁移后预计空值: ' + report.nullRecordUidAfter + ' 条');
+        if (report.actualNullRecordUid >= 0) {
+          lines.push('<strong>执行后实际查询 record_uid 为空: ' + report.actualNullRecordUid + ' 条</strong>');
+          if (report.actualNullRecordUid === 0 && report.failedNullUidPatch === 0 && report.failedDuplicateDelete === 0) {
+            lines.push('<span style="color:#00d4aa;">实际空值为 0，无失败记录，可进入阶段B</span>');
+          } else if (report.actualNullRecordUid === 0 && (report.failedNullUidPatch > 0 || report.failedDuplicateDelete > 0)) {
+            lines.push('<span style="color:#ffb443;">实际空值为 0，但存在失败操作，请检查错误后再确认</span>');
+          } else {
+            lines.push('<span style="color:#ffb443;">仍有 ' + report.actualNullRecordUid + ' 条实际空值，不可执行阶段B SQL</span>');
+          }
         } else {
-          lines.push('<span style="color:#ffb443;">仍有 ' + report.nullRecordUidAfter + ' 条空记录，需检查后再执行阶段B SQL</span>');
+          lines.push('<span style="color:#ffb443;">执行后查询实际空值失败，请手动检查后再决定</span>');
         }
         if (report.errors.length > 0) {
           lines.push('<span style="color:#ffb443;">错误: ' + report.errors.length + ' 条</span>');
@@ -2176,6 +2196,9 @@ function updateSyncStatus(dbState) {
     }
     if (dbState === 'schema_not_ready') {
       stateText = '（数据库未升级）';
+      stateColor = '#ff4d6d';
+    } else if (dbState === 'auth_error') {
+      stateText = '（认证失败，请检查 URL 和 Key）';
       stateColor = '#ff4d6d';
     } else if (dbState === 'migration_required') {
       stateText = '（待数据迁移）';

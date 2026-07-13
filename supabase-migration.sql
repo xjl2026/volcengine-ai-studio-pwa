@@ -65,6 +65,61 @@ CREATE TRIGGER history_set_timestamps
   FOR EACH ROW
   EXECUTE FUNCTION set_history_timestamps();
 
+-- Step 5: 创建只读 RPC 函数（v1.6.2: 无副作用约束检查）
+-- 返回 record_uid 列的 NOT NULL 状态和 UNIQUE(user_id, record_uid) 约束状态
+-- 使用 information_schema 和 pg_catalog 只读检查，不插入/更新/删除任何数据
+CREATE OR REPLACE FUNCTION get_history_sync_constraints()
+RETURNS JSON AS $$
+DECLARE
+  result JSON;
+  col_not_null BOOLEAN := false;
+  constr_ready BOOLEAN := false;
+BEGIN
+  -- 检查 record_uid 列是否 NOT NULL
+  SELECT EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'history'
+      AND column_name = 'record_uid'
+      AND is_nullable = 'NO'
+  ) INTO col_not_null;
+
+  -- 检查 UNIQUE(user_id, record_uid) 约束是否存在
+  -- 检查名为 history_user_record_uid_key 的唯一约束
+  SELECT EXISTS(
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.history'::regclass
+      AND contype = 'u'
+      AND conname = 'history_user_record_uid_key'
+  ) INTO constr_ready;
+
+  -- 如果按名称没找到，再按列组合检查
+  IF NOT constr_ready THEN
+    SELECT EXISTS(
+      SELECT 1 FROM pg_constraint pc
+      JOIN pg_class c ON c.oid = pc.conrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname = 'history'
+        AND pc.contype = 'u'
+        AND array_to_string(pc.conkey, ',') IN ('1,5', '5,1')
+        -- conkey 是列序号数组，user_id 通常是第1列，record_uid 是新加的列
+    ) INTO constr_ready;
+  END IF;
+
+  result := json_build_object(
+    'record_uid_not_null', col_not_null,
+    'unique_constraint_ready', constr_ready
+  );
+
+  RETURN result;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_catalog;
+
+-- 授予 anon 和 authenticated 角色调用权限
+GRANT EXECUTE ON FUNCTION get_history_sync_constraints() TO anon, authenticated;
+
 -- ============================================================
 -- 验证（执行后检查）
 -- ============================================================
@@ -75,6 +130,11 @@ CREATE TRIGGER history_set_timestamps
 -- 确认 Trigger 已创建：
 --   SELECT trigger_name, event_manipulation FROM information_schema.triggers 
 --   WHERE event_object_table = 'history';
+--
+-- 确认 RPC 函数已创建：
+--   SELECT get_history_sync_constraints();
+--   -- 应返回 {"record_uid_not_null": false, "unique_constraint_ready": false}
+--   -- （阶段A后、阶段B前，两个约束都还没建立）
 --
 -- 确认旧前端仍能正常使用（插入一条测试记录验证）：
 --   INSERT INTO history (user_id, encrypted_data, iv) 
