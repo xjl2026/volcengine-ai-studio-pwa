@@ -8,6 +8,7 @@ const CACHE_FILES = [
   './style.css',
   './api.js',
   './sync.js',
+  './merge-cloud-history.js',
   './app.js',
   './manifest.json'
 ];
