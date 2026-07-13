@@ -1238,7 +1238,7 @@ function getExpiryInfo(createdAt) {
 
 // ============ 历史记录 ============
 async function renderHistory() {
-  const history = await Store.getHistory();
+  const history = (await Store.getHistory()).filter(r => !r._isDeleted);
   const list = document.getElementById('historyList');
   if (!history || history.length === 0) { list.innerHTML = '<div class="empty-state"><p>暂无历史记录</p></div>'; return; }
   list.innerHTML = '';
@@ -1506,7 +1506,7 @@ function initSelectMode() {
 
   // 全选
   document.getElementById('btnSelectAll').onclick = async () => {
-    const history = await Store.getHistory();
+    const history = (await Store.getHistory()).filter(r => !r._isDeleted);
     const videos = history.filter(r => r.type === 'video' && r.result?.[0]);
     if (selectedRecords.length === videos.length) {
       selectedRecords = [];
@@ -1554,7 +1554,7 @@ function updateSelectModeUI() {
 }
 
 async function renderHistorySelectMode() {
-  const history = await Store.getHistory();
+  const history = (await Store.getHistory()).filter(r => !r._isDeleted);
   const list = document.getElementById('historyList');
   list.innerHTML = '';
 
@@ -1737,7 +1737,7 @@ function initPlaylistPlayer() {
 }
 
 async function startPlaylist() {
-  const history = await Store.getHistory();
+  const history = (await Store.getHistory()).filter(r => !r._isDeleted);
   // 按 selectedRecords 数组顺序（即用户勾选顺序）获取视频
   const selected = selectedRecords
     .map(id => history.find(r => r.id === id))
@@ -1877,6 +1877,8 @@ async function initSync() {
   if (config.url && config.anonKey && config.syncKey) {
     await SyncManager.configure(config.url, config.anonKey, config.syncKey);
     await syncHistoryFromCloud();
+    // 重试待同步记录（含墓碑删除重试）
+    try { await SyncManager.retryPendingSync(); } catch (e) { console.warn('重试同步失败: ', e); }
   }
 }
 
@@ -1884,41 +1886,99 @@ async function syncHistoryFromCloud() {
   if (!SyncManager.isEnabled()) return;
   try {
     const cloudRecords = await SyncManager.pullHistory();
-    if (cloudRecords.length === 0) {
-      // 云端为空，把本地记录全部推送上去
-      const localHistory = await Store.getHistory();
-      for (const record of localHistory) {
-        const syncId = await SyncManager.pushHistory(record);
-        if (syncId) record._syncId = syncId;
-      }
-      await Store.saveHistory(localHistory);
-      return;
-    }
-    // 合并云端和本地记录
     const localHistory = await Store.getHistory();
-    const localIds = new Set(localHistory.map(r => r.id));
-    const cloudIds = new Set(cloudRecords.map(r => r.id));
-    // 添加云端有但本地没有的
-    const merged = [...localHistory];
-    for (const cr of cloudRecords) {
-      if (!localIds.has(cr.id)) merged.push(cr);
-    }
-    // 给本地有但云端没有的记录推送上去
-    for (const lr of localHistory) {
-      if (!lr._syncId && !cloudIds.has(lr.id)) {
-        const syncId = await SyncManager.pushHistory(lr);
-        if (syncId) lr._syncId = syncId;
+    let needSave = false;
+
+    // 构建本地 recordUid 索引
+    var localByRecordUid = {};
+    for (var i = 0; i < localHistory.length; i++) {
+      if (localHistory[i].recordUid) {
+        localByRecordUid[localHistory[i].recordUid] = localHistory[i];
       }
     }
+
+    // 处理云端记录
+    var cloudRecordUids = new Set();
+    for (var ci = 0; ci < cloudRecords.length; ci++) {
+      var cr = cloudRecords[ci];
+      var crUid = cr.recordUid || cr._cloudRecordUid;
+      if (crUid) cloudRecordUids.add(crUid);
+
+      var localRecord = crUid ? localByRecordUid[crUid] : null;
+
+      if (cr._cloudIsDeleted === true) {
+        // 云端墓碑：标记本地记录为已删除
+        if (localRecord && !localRecord._isDeleted) {
+          localRecord._isDeleted = true;
+          localRecord._deletedAt = cr._cloudUpdatedAt || new Date().toISOString();
+          localRecord._deletePending = false; // 云端已删除
+          needSave = true;
+        }
+        continue;
+      }
+
+      if (!localRecord) {
+        // 本地没有：从云端插入
+        var newRec = { ...cr };
+        delete newRec._cloudIsDeleted;
+        newRec._cloudUpdatedAt = cr._cloudUpdatedAt;
+        localHistory.push(newRec);
+        localByRecordUid[crUid] = newRec;
+        needSave = true;
+        continue;
+      }
+
+      // 本地有对应记录
+      if (!localRecord._syncPending) {
+        // 本地无未同步修改：云端覆盖本地
+        Object.assign(localRecord, cr);
+        delete localRecord._cloudIsDeleted;
+        localRecord._cloudUpdatedAt = cr._cloudUpdatedAt;
+        needSave = true;
+      } else {
+        // 本地有未同步修改：检查冲突
+        if (localRecord._cloudUpdatedAt && cr._cloudUpdatedAt &&
+            localRecord._cloudUpdatedAt !== cr._cloudUpdatedAt) {
+          // 云端已被其他设备修改 → 冲突
+          localRecord._syncConflict = true;
+          needSave = true;
+        }
+        // 如果 _cloudUpdatedAt 一致，说明云端未被修改，可安全上传（retryPendingSync 会处理）
+      }
+    }
+
+    // 上传本地有但云端没有的记录
+    for (var i = 0; i < localHistory.length; i++) {
+      var rec = localHistory[i];
+      if (rec._isDeleted) continue;
+      if (!rec.recordUid || cloudRecordUids.has(rec.recordUid)) continue;
+      if (!rec._syncId) {
+        try {
+          var result = await SyncManager.upsertHistory(rec);
+          if (result) {
+            rec._syncId = result.syncId;
+            rec._cloudUpdatedAt = result.cloudUpdatedAt;
+            rec._syncPending = false;
+            needSave = true;
+          }
+        } catch (e) {
+          console.warn('上传本地记录失败: ', e);
+          rec._syncPending = true;
+          needSave = true;
+        }
+      }
+    }
+
     // 按 createdAt 降序排列
-    merged.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-    if (merged.length > 500) merged.length = 500;
-    await Store.saveHistory(merged);
-    window._historyRendered = false;
-    // 改动 34: 如果当前在历史页，立即刷新
-    if (document.getElementById('page-history')?.classList.contains('active')) {
-      renderHistory();
-      window._historyRendered = true;
+    localHistory.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    if (localHistory.length > 500) localHistory.length = 500;
+    if (needSave) {
+      await Store.saveHistory(localHistory);
+      window._historyRendered = false;
+      if (document.getElementById('page-history')?.classList.contains('active')) {
+        renderHistory();
+        window._historyRendered = true;
+      }
     }
   } catch (e) {
     console.warn('同步历史记录失败: ', e);
@@ -1942,6 +2002,7 @@ function initSyncSettings() {
       updateSyncStatus();
       showToast('同步设置已保存，正在同步...', 'success');
       await syncHistoryFromCloud();
+      try { await SyncManager.retryPendingSync(); } catch (e) { console.warn('重试同步失败: ', e); }
       showToast('同步完成', 'success');
     } else if (!url && !anonKey && !syncKey) {
       Store.saveSyncConfig({ url: '', anonKey: '', syncKey: '' });

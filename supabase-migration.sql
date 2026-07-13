@@ -90,6 +90,12 @@ CREATE TRIGGER history_set_timestamps
 --   2. 云端重复记录已处理
 --   3. 用户已确认迁移完成
 --
+-- 执行以下 SQL 启用唯一约束：
 -- ALTER TABLE history ALTER COLUMN record_uid SET NOT NULL;
 -- ALTER TABLE history ADD CONSTRAINT history_user_record_uid_key
 --   UNIQUE (user_id, record_uid);
+--
+-- 安全回滚（如需）：
+-- ALTER TABLE history DROP CONSTRAINT IF EXISTS history_user_record_uid_key;
+-- ALTER TABLE history ALTER COLUMN record_uid DROP NOT NULL;
+-- DROP TRIGGER IF EXISTS history_set_timestamps ON history;
