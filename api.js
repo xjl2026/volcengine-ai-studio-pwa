@@ -64,9 +64,17 @@ const Store = {
     history.unshift(r);
     if (history.length > 500) history.length = 500;
     await this.saveHistory(history);
-    // 同步到云端
+    // 同步到云端（阶段B：使用 on_conflict Upsert）
     if (window.SyncManager && SyncManager.isEnabled()) {
-      try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); r._syncPending = true; await this.saveHistory(history); }
+      try {
+        const result = await SyncManager.upsertHistory(r);
+        if (result) {
+          r._syncId = result.syncId;
+          r._cloudUpdatedAt = result.cloudUpdatedAt;
+          r._syncPending = false;
+        }
+      } catch (e) { console.warn('推送同步失败: ', e); r._syncPending = true; }
+      await this.saveHistory(history);
     }
     return r;
   },
@@ -77,9 +85,23 @@ const Store = {
       Object.assign(history[idx], patch);
       history[idx].updatedAt = new Date().toISOString();
       await this.saveHistory(history);
-      // 同步到云端
-      if (window.SyncManager && SyncManager.isEnabled() && history[idx]._syncId) {
-        try { await SyncManager.pushHistory(history[idx]); } catch (e) { console.warn('更新同步失败: ', e); history[idx]._syncPending = true; await this.saveHistory(history); }
+      // 同步到云端（阶段B：有 _syncId 走 PATCH，否则走 upsert）
+      if (window.SyncManager && SyncManager.isEnabled()) {
+        try {
+          let result;
+          if (history[idx]._syncId) {
+            result = await SyncManager.updateHistory(history[idx]._syncId, history[idx]);
+          } else if (history[idx].recordUid) {
+            result = await SyncManager.upsertHistory(history[idx]);
+          }
+          if (result) {
+            if (result.syncId) history[idx]._syncId = result.syncId;
+            history[idx]._cloudUpdatedAt = result.cloudUpdatedAt;
+            history[idx]._syncPending = false;
+            history[idx]._syncConflict = false;
+          }
+        } catch (e) { console.warn('更新同步失败: ', e); history[idx]._syncPending = true; }
+        await this.saveHistory(history);
       }
       return history[idx];
     }
@@ -88,21 +110,64 @@ const Store = {
   async removeHistory(id) {
     const history = await this.getHistory();
     const record = history.find(r => r.id === id);
-    const filtered = history.filter(r => r.id !== id);
-    await this.saveHistory(filtered);
-    // 从云端删除
-    if (record && record._syncId && window.SyncManager && SyncManager.isEnabled()) {
-      try { await SyncManager.deleteHistory(record._syncId); } catch (e) { console.warn('同步删除失败: ', e); }
+    if (!record) return history.filter(r => !r._isDeleted);
+
+    // V3.2.1：标记为隐藏墓碑，不从 localStorage 移除
+    record._isDeleted = true;
+    record._deletedAt = new Date().toISOString();
+    record._deletePending = true;
+    await this.saveHistory(history);
+
+    // 云端软删除
+    if (record.recordUid && window.SyncManager && SyncManager.isEnabled()) {
+      try {
+        await SyncManager.deleteHistory(record.recordUid);
+        record._deletePending = false;
+        await this.saveHistory(history);
+      } catch (e) {
+        console.warn('墓碑同步失败: ', e);
+      }
     }
-    return filtered;
+
+    return history.filter(r => !r._isDeleted);
   },
   async clearHistory() {
-    localStorage.setItem('volc_history', '[]');
-    // 清空云端
-    if (window.SyncManager && SyncManager.isEnabled()) {
-      try { await SyncManager.clearAllHistory(); } catch (e) { console.warn('同步清空失败: ', e); }
+    const history = await this.getHistory();
+    const now = new Date().toISOString();
+
+    // V3.2.1：本地所有记录标记为隐藏墓碑
+    for (const record of history) {
+      if (record._isDeleted) continue;
+      record._isDeleted = true;
+      record._deletedAt = now;
+      record._deletePending = true;
     }
-    return [];
+    await this.saveHistory(history);
+
+    // 云端批量软删除
+    if (window.SyncManager && SyncManager.isEnabled()) {
+      let successCount = 0;
+      let failCount = 0;
+      for (const record of history) {
+        if (!record._isDeleted || !record._deletePending) continue;
+        if (!record.recordUid) { failCount++; continue; }
+        try {
+          await SyncManager.deleteHistory(record.recordUid);
+          record._deletePending = false;
+          successCount++;
+        } catch (e) {
+          console.warn('墓碑同步失败:', e);
+          failCount++;
+        }
+      }
+      await this.saveHistory(history);
+      if (typeof showToast === 'function') {
+        showToast('清空完成：成功' + successCount + '条，待同步' + failCount + '条', failCount > 0 ? 'warning' : 'success');
+      }
+    }
+
+    // 不执行 localStorage.setItem('volc_history', '[]')
+    return history.filter(r => !r._isDeleted);
   },
   // 多 API Key 管理
   getApiKeys() { try { return JSON.parse(localStorage.getItem('volc_api_keys')) || []; } catch { return []; } },

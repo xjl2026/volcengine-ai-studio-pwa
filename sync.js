@@ -107,8 +107,8 @@ const SyncManager = {
     return text ? JSON.parse(text) : null;
   },
 
-  // 推送单条历史记录（阶段A：带 record_uid，不用 on_conflict）
-  async pushHistory(record) {
+  // 阶段B：基于 on_conflict 的 Upsert（需要 UNIQUE 约束）
+  async upsertHistory(record) {
     if (!this.isEnabled()) return null;
     var enc = await encryptObj(this._syncKey, record);
     var body = {
@@ -117,11 +117,51 @@ const SyncManager = {
       iv: enc.iv
     };
     if (record.recordUid) body.record_uid = record.recordUid;
-    var rows = await this._request('/history', {
+    // 不传 is_deleted，依赖数据库默认值 false
+    var rows = await this._request('/history?on_conflict=user_id,record_uid', {
       method: 'POST',
+      upsert: true,
       body: body
     });
-    return rows && rows[0] ? rows[0].id : null;
+    if (rows && rows[0]) {
+      return { syncId: rows[0].id, cloudUpdatedAt: rows[0].updated_at };
+    }
+    return null;
+  },
+
+  // 基于 syncId 的 PATCH 更新
+  async updateHistory(syncId, record) {
+    if (!this.isEnabled() || !syncId) return null;
+    var enc = await encryptObj(this._syncKey, record);
+    var rows = await this._request('/history?id=eq.' + encodeURIComponent(syncId), {
+      method: 'PATCH',
+      body: {
+        encrypted_data: enc.encrypted_data,
+        iv: enc.iv
+      }
+    });
+    if (rows && rows[0]) {
+      return { syncId: rows[0].id, cloudUpdatedAt: rows[0].updated_at };
+    }
+    return { syncId: syncId, cloudUpdatedAt: null };
+  },
+
+  // 阶段B：基于 recordUid 的软删除（PATCH is_deleted=true）
+  async deleteHistory(recordUid) {
+    if (!this.isEnabled() || !recordUid) return;
+    await this._request('/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=eq.' + encodeURIComponent(recordUid), {
+      method: 'PATCH',
+      body: { is_deleted: true }
+    });
+  },
+
+  // 恢复记录（PATCH is_deleted=false）
+  async restoreHistory(recordUid) {
+    if (!this.isEnabled() || !recordUid) return;
+    await this._request('/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=eq.' + encodeURIComponent(recordUid), {
+      method: 'PATCH',
+      body: { is_deleted: false }
+    });
   },
 
   // 分页拉取全部云端行（含 record_uid, updated_at, is_deleted 等元数据）
@@ -386,9 +426,10 @@ const SyncManager = {
         for (var i = 0; i < localHistory.length; i++) {
           if (!localMatched.has(i) && !localHistory[i]._syncId) {
             try {
-              var syncId = await this.pushHistory(localHistory[i]);
-              if (syncId) {
-                localHistory[i]._syncId = syncId;
+              var result = await this.upsertHistory(localHistory[i]);
+              if (result && result.syncId) {
+                localHistory[i]._syncId = result.syncId;
+                localHistory[i]._cloudUpdatedAt = result.cloudUpdatedAt;
                 localToPush++;
               }
             } catch (e) {
@@ -418,16 +459,61 @@ const SyncManager = {
     return report;
   },
 
-  // 删除单条历史记录
-  async deleteHistory(syncId) {
-    if (!this.isEnabled() || !syncId) return;
-    await this._request('/history?id=eq.' + encodeURIComponent(syncId), { method: 'DELETE' });
-  },
-
-  // 清空所有历史记录
+  // 阶段B：批量软删除（PATCH is_deleted=true）
   async clearAllHistory() {
     if (!this.isEnabled()) return;
-    await this._request('/history?user_id=eq.' + encodeURIComponent(this._userId), { method: 'DELETE' });
+    await this._request('/history?user_id=eq.' + encodeURIComponent(this._userId), {
+      method: 'PATCH',
+      body: { is_deleted: true }
+    });
+  },
+
+  // 重试待同步记录（含墓碑删除重试）
+  async retryPendingSync() {
+    if (!this.isEnabled()) return;
+    var history = await Store.getHistory();
+    var needSave = false;
+
+    for (var i = 0; i < history.length; i++) {
+      var record = history[i];
+
+      // 已删除记录：重试墓碑同步
+      if (record._isDeleted) {
+        if (record._deletePending && record.recordUid) {
+          try {
+            await this.deleteHistory(record.recordUid);
+            record._deletePending = false;
+            needSave = true;
+          } catch (e) {
+            console.warn('墓碑删除重试失败:', e);
+          }
+        }
+        continue;
+      }
+
+      // 普通待同步记录
+      if (!record._syncPending) continue;
+
+      try {
+        var result;
+        if (record._syncId) {
+          result = await this.updateHistory(record._syncId, record);
+        } else {
+          result = await this.upsertHistory(record);
+        }
+        if (result && result.syncId) {
+          record._syncId = result.syncId;
+          record._cloudUpdatedAt = result.cloudUpdatedAt;
+          record._syncPending = false;
+          record._syncConflict = false;
+          needSave = true;
+        }
+      } catch (e) {
+        console.warn('同步重试失败:', e);
+      }
+    }
+
+    if (needSave) await Store.saveHistory(history);
   },
 
   // 推送设置
