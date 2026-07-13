@@ -1,6 +1,14 @@
 // sync.js - Supabase 跨设备同步模块
 // 使用 AES-GCM 客户端加密，数据在 Supabase 中以密文存储
 
+// ============ 工具函数 ============
+// v1.6.3: 统一获取记录的 model ID
+// 兼容旧记录的 params.model 和可能的顶层 model
+function getRecordModel(record) {
+  if (!record) return '';
+  return record.model || (record.params && record.params.model) || '';
+}
+
 // ============ 加密工具 ============
 async function sha256Hex(input) {
   const data = new TextEncoder().encode(input);
@@ -321,17 +329,22 @@ const SyncManager = {
   },
 
   // 阶段B：基于 recordUid 的软删除（PATCH is_deleted=true）
+  // v1.6.3: 检查返回行数，更新 0 行时抛出 DELETE_TARGET_NOT_FOUND
   async deleteHistory(recordUid) {
     if (!this.isEnabled() || !recordUid) return;
     // schema 未准备好时不执行软删除（is_deleted 字段不存在）
     var dbState = await this.checkDbState();
-    if (dbState === 'schema_not_ready' || dbState === 'network_error') {
+    if (dbState === 'schema_not_ready' || dbState === 'network_error' || dbState === 'auth_error') {
       throw new Error('DB_NOT_READY:' + dbState);
     }
-    await this._request('/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=eq.' + encodeURIComponent(recordUid), {
+    var rows = await this._request('/history?user_id=eq.' + encodeURIComponent(this._userId) + '&record_uid=eq.' + encodeURIComponent(recordUid), {
       method: 'PATCH',
       body: { is_deleted: true }
     });
+    // v1.6.3: 检查返回结果，更新 0 行时抛出错误
+    if (!rows || rows.length === 0) {
+      throw new Error('DELETE_TARGET_NOT_FOUND:record_uid=' + recordUid);
+    }
   },
 
   // 恢复记录（PATCH is_deleted=false）
@@ -685,7 +698,8 @@ const SyncManager = {
         }
         // 只处理图片记录
         if (!cRec || cRec.type !== 'image') continue;
-        if (!cRec.prompt || !cRec.result || !cRec.model) continue;
+        var cloudModel = getRecordModel(cRec);
+        if (!cRec.prompt || !cRec.result || !cloudModel) continue;
 
         // 查找候选匹配
         var candidates = [];
@@ -693,9 +707,10 @@ const SyncManager = {
           if (localMatched.has(i)) continue;
           var lRec = localHistory[i];
           if (lRec.type !== 'image') continue;
-          if (!lRec.prompt || !lRec.result || !lRec.model) continue;
+          var localModel = getRecordModel(lRec);
+          if (!lRec.prompt || !lRec.result || !localModel) continue;
           // model 完全一致
-          if (cRec.model !== lRec.model) continue;
+          if (cloudModel !== localModel) continue;
           // prompt 完全一致
           if (cRec.prompt !== lRec.prompt) continue;
           // result URL 数组完全一致
@@ -731,7 +746,7 @@ const SyncManager = {
           // 多于 1 条候选：列入 uncertainMatches，不自动 PATCH
           report.uncertainMatches++;
           report.uncertainDetails.push({
-            model: cRec.model,
+            model: cloudModel,
             prompt: cRec.prompt.substring(0, 80),
             createdAt: cRec.createdAt || '',
             candidates: candidates.length
@@ -845,10 +860,12 @@ const SyncManager = {
         if (record._deletePending && record.recordUid) {
           try {
             await this.deleteHistory(record.recordUid);
+            // v1.6.3: 只有 deleteHistory 不抛异常（返回至少1行）才清除 _deletePending
             record._deletePending = false;
             needSave = true;
           } catch (e) {
-            console.warn('墓碑删除重试失败:', e);
+            // v1.6.3: DELETE_TARGET_NOT_FOUND 或网络错误都保留 _deletePending
+            console.warn('墓碑删除重试失败:', e.message);
           }
         }
         continue;

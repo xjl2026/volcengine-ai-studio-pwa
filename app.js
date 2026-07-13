@@ -1,8 +1,8 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.2';
-const APP_BUILD = '2026-07-13 13:30:00';
+const APP_VERSION = '1.6.3';
+const APP_BUILD = '2026-07-13 14:25:00';
 
 let imgMode = 't2i';
 let vidMode = 't2v'; // t2v / i2v

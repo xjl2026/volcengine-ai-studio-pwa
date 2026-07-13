@@ -147,13 +147,15 @@ const Store = {
         if (dbState === 'ready' || dbState === 'constraint_not_ready' || dbState === 'migration_required') {
           // schema 字段存在时可以软删除
           await SyncManager.deleteHistory(record.recordUid);
+          // v1.6.3: 只有 deleteHistory 不抛异常才视为成功
           record._deletePending = false;
         } else {
           // schema 未就绪：保留 _deletePending，等待后续同步
           console.warn('数据库未就绪 (' + dbState + ')，墓碑待后续同步');
         }
       } catch (e) {
-        console.warn('墓碑同步失败: ', e);
+        // v1.6.3: DELETE_TARGET_NOT_FOUND 或其他错误都保留 _deletePending
+        console.warn('墓碑同步失败: ', e.message);
       }
       await this.saveHistory(history);
     }
