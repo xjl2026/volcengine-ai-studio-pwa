@@ -123,7 +123,8 @@ async function arkRequest(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + config.apiKey, ...options.headers };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 600000);
+  const actualTimeout = options.timeout || 600000;
+  const timeoutId = setTimeout(() => controller.abort(), actualTimeout);
   // 支持外部 AbortController（用于用户手动取消）
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
@@ -146,7 +147,7 @@ async function arkRequest(path, options = {}) {
     if (e.name === 'AbortError') {
       // 区分是外部取消还是超时
       if (options.signal && options.signal.aborted) throw new Error('用户取消');
-      throw new Error('请求超时（180秒），请检查网络后重试');
+      throw new Error('请求超时（' + Math.round(actualTimeout / 1000) + '秒），请检查网络后重试');
     }
     throw e;
   }
