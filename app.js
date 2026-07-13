@@ -391,9 +391,11 @@ async function handleImageGenerate() {
   await doImageGenerate(params, prompt);
 }
 
-// 图片生成实际执行（支持重试，最多自动重试1次）
+// 图片生成实际执行（失败后不自动重试，防止重复扣费）
 async function doImageGenerate(params, prompt, isRetry) {
   const btn = document.getElementById('btnGenImage');
+  // 防双击
+  if (btn.disabled && !isRetry) return;
   btn.disabled = true; btn.textContent = '生成中...';
   imgAbortController = new AbortController();
 
@@ -416,11 +418,7 @@ async function doImageGenerate(params, prompt, isRetry) {
         window._historyRendered = false;
       } else { panel.innerHTML = '<div class="result-placeholder"><p>未返回图片数据</p></div>'; showToast('未返回图片数据', 'warning'); }
     } else {
-      // 请求失败：首次失败自动重试一次，重试失败显示按钮
-      if (!isRetry) {
-        showToast('请求失败，自动重试中...', 'warning');
-        return await doImageGenerate(params, prompt, true);
-      }
+      // 请求失败：不自动重试，显示重试按钮
       panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">生成失败</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">' + escapeHtml(result.error || '') + '</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
       document.getElementById('btnRetryImage').onclick = () => doImageGenerate(params, prompt, true);
       showToast('失败: ' + (result.error || ''), 'error');
@@ -431,14 +429,10 @@ async function doImageGenerate(params, prompt, isRetry) {
       panel.innerHTML = '<div class="result-placeholder"><p>已取消</p></div>';
       showToast('已取消', 'info');
     } else {
-      // 网络中断等异常：首次异常自动重试一次，重试失败显示按钮
-      if (!isRetry) {
-        showToast('网络异常，自动重试中...', 'warning');
-        return await doImageGenerate(params, prompt, true);
-      }
-      panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">网络异常</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">' + escapeHtml(e.message) + '</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
+      // 网络异常：不自动重试，提示谨慎重试
+      panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ff4d6d">网络异常</div><div class="status-detail" style="font-size:13px;color:#a0a0b8;margin-top:4px;">网络异常，无法确认服务端是否已完成生成。再次提交可能产生第二次调用费用，请谨慎重试。</div><button class="btn-primary" id="btnRetryImage" style="margin-top:12px;">重试</button></div>';
       document.getElementById('btnRetryImage').onclick = () => doImageGenerate(params, prompt, true);
-      showToast('错误: ' + e.message, 'error');
+      showToast('网络异常，请谨慎重试', 'error');
     }
   }
   finally { btn.disabled = false; btn.textContent = '生成图片'; imgAbortController = null; }
