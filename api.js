@@ -2,6 +2,12 @@
 
 const ARK_BASE_URL = 'https://ark.cn-beijing.volces.com';
 
+// 统一获取 API 基础域名，自动去除尾部斜杠
+function getApiBaseUrl(config) {
+  const base = String((config && config.apiDomain) || ARK_BASE_URL).trim();
+  return base.replace(/\/+$/, '');
+}
+
 const IMAGE_MODELS = [
   { id: 'doubao-seedream-5-0-pro-260628', name: 'Seedream 5.0 Pro', sizes: ['1K', '2K'], formats: ['png', 'jpeg'],
     caps: { outputFormat: true, sequential: false, stream: false, webSearch: false, optimizeFast: false, maxRefImages: 10 } },
@@ -113,7 +119,7 @@ async function arkRequest(path, options = {}) {
   const config = await Store.getConfig();
   if (!config.apiKey) throw new Error('请先在设置中配置 API Key');
 
-  const url = ARK_BASE_URL + path;
+  const url = getApiBaseUrl(config) + path;
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + config.apiKey, ...options.headers };
 
   const controller = new AbortController();
@@ -283,7 +289,7 @@ async function pollVideoTask(taskId, onProgress, interval, maxAttempts) {
 // 不能用 GET /api/v3/models（CORS 拦截），不能用 arkRequest（会真的生成图片+signal问题）
 // 直接发一个 POST 请求到图片生成接口，不带 signal，只看返回的状态码
 async function testConnection(apiKey, apiDomain) {
-  const url = (apiDomain || ARK_BASE_URL).replace(/\/$/, '') + '/api/v3/images/generations';
+  const url = getApiBaseUrl({ apiDomain }) + '/api/v3/images/generations';
   try {
     const res = await fetch(url, {
       method: 'POST',
