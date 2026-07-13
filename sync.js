@@ -408,12 +408,21 @@ const SyncManager = {
   },
 
   // PATCH 云端记录补写 record_uid
+  // 必须确认 PostgREST 实际返回被更新的行，避免 200 + [] 被误判为成功
   async patchRecordUid(cloudId, recordUid) {
-    if (!this.isEnabled() || !cloudId || !recordUid) return false;
-    await this._request('/history?id=eq.' + encodeURIComponent(cloudId), {
-      method: 'PATCH',
-      body: { record_uid: recordUid }
-    });
+    if (!this.isEnabled()) throw new Error('同步未启用');
+    if (!cloudId || !recordUid) throw new Error('PATCH_RECORD_UID_INVALID_ARGUMENT');
+    var rows = await this._request(
+      '/history?user_id=eq.' + encodeURIComponent(this._userId) +
+      '&id=eq.' + encodeURIComponent(cloudId),
+      {
+        method: 'PATCH',
+        body: { record_uid: recordUid }
+      }
+    );
+    if (!rows || rows.length !== 1 || rows[0].record_uid !== recordUid) {
+      throw new Error('PATCH_RECORD_UID_TARGET_NOT_FOUND:' + cloudId);
+    }
     return true;
   },
 
@@ -642,6 +651,9 @@ const SyncManager = {
       // Step 5: 匹配本地与云端
       var localMatched = new Set();
       var cloudMatched = new Set();
+      // 可靠匹配 PATCH 失败的云端行，本轮不得降级为“独立补 UID”。
+      // 否则会切断其与本地记录的确定关联，并在后续同步时制造重复。
+      var failedMatchedCloudIds = new Set();
 
       // 5a. 按 recordUid 匹配（原本已有 record_uid）
       for (var i = 0; i < localHistory.length; i++) {
@@ -682,8 +694,9 @@ const SyncManager = {
                   report.successfulNullUidPatch++;
                 } catch (e) {
                   report.failedNullUidPatch++;
+                  failedMatchedCloudIds.add(crow.id);
                   report.errors.push('PATCH record_uid 失败 (cloudId=' + crow.id + '): ' + e.message);
-                  // PATCH 失败：不标记匹配，不写 _syncId
+                  // PATCH 失败：不标记匹配、不写 _syncId，也不在本轮降级为独立补 UID
                   continue;
                 }
               } else {
@@ -746,6 +759,7 @@ const SyncManager = {
               report.successfulNullUidPatch++;
             } catch (e) {
               report.failedNullUidPatch++;
+              failedMatchedCloudIds.add(crow.id);
               report.errors.push('PATCH record_uid 失败 (image match): ' + e.message);
               continue;
             }
@@ -777,6 +791,7 @@ const SyncManager = {
       for (var ci = 0; ci < cloudWithoutRecordUid.length; ci++) {
         var crow = cloudWithoutRecordUid[ci];
         if (cloudMatched.has(crow.id)) continue;      // 已匹配本地
+        if (failedMatchedCloudIds.has(crow.id)) continue; // 可靠匹配写入失败，留待重试，禁止改发独立 UID
         if (oldDupIds.has(crow.id)) continue;           // 属于待删除旧重复
         if (duplicatesToDelete.some(function(r) { return r.id === crow.id; })) continue; // 属于待删除重复
 
@@ -877,8 +892,18 @@ const SyncManager = {
         }
       }
 
-      report.success = true;
-      report.steps.push(preview ? '预览完成（未修改数据）' : '迁移执行完成');
+      var hasOperationFailures = report.failedNullUidPatch > 0
+        || report.failedIndependentUidPatch > 0
+        || report.failedDuplicateDelete > 0;
+      var actualCheckFailed = !preview && report.actualNullRecordUid < 0;
+      var actualHasNull = !preview && report.actualNullRecordUid > 0;
+
+      report.success = !hasOperationFailures && !actualCheckFailed && !actualHasNull;
+      if (report.success) {
+        report.steps.push(preview ? '预览完成（未修改数据）' : '迁移执行完成');
+      } else {
+        report.steps.push('迁移未完成：存在失败操作、实际空值或无法确认实际空值');
+      }
     } catch (e) {
       report.success = false;
       report.errors.push('迁移异常: ' + e.message);
