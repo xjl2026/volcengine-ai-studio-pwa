@@ -144,17 +144,24 @@ var testPassed = 0;
 var testFailed = 0;
 var testTotal = 0;
 var testResults = [];
+var asyncTests = [];
 
 function test(name, fn) {
   testTotal++;
+  setupDOM();
+  var result;
   try {
-    setupDOM();
-    fn();
-    testPassed++;
-    testResults.push('PASS: ' + name);
+    result = fn();
   } catch (e) {
     testFailed++;
     testResults.push('FAIL: ' + name + ' - ' + e.message);
+    return;
+  }
+  if (result && typeof result.then === 'function') {
+    asyncTests.push({ name: name, promise: result });
+  } else {
+    testPassed++;
+    testResults.push('PASS: ' + name);
   }
 }
 
@@ -367,13 +374,167 @@ test('index.html query 参数 v=1.6.6', function() {
   assert.ok(html.indexOf('app.js?v=1.6.6') >= 0, 'index.html should use ?v=1.6.6');
 });
 
+// ============ 提取执行迁移 onclick 收尾逻辑 ============
+// 从 app.js 源码中提取 btnMigrateExecute.onclick handler 的完整定义
+// 用于在测试中实际执行收尾逻辑
+var execHandlerMatch = appCode.match(/document\.getElementById\('btnMigrateExecute'\)\.onclick = async \(\) => \{([\s\S]*?)\n  \};/);
+assert.ok(execHandlerMatch, '必须找到 btnMigrateExecute.onclick handler 定义');
+var execHandlerBody = execHandlerMatch[1];
+
+// Mock showToast / confirm / SyncManager.migrateHistoryData / renderHistory
+global.showToast = function() {};
+global.renderHistory = function() {};
+global.confirm = function() { return true; };
+
+// 构建一个可执行的 async 函数来模拟 onclick handler
+// 使用 eval 在当前作用域定义，确保能访问 updateMigrationUI / updateSyncStatus
+function buildExecHandler(mockMigrateResult, mockNewDbState) {
+  var origMigrate = global.SyncManager.migrateHistoryData;
+  var origClearDbState = global.SyncManager.clearDbStateCache;
+  var origCheckDbState = global.SyncManager.checkDbState;
+  global.SyncManager.migrateHistoryData = function() { return Promise.resolve(mockMigrateResult); };
+  global.SyncManager.clearDbStateCache = function() {};
+  global.SyncManager.checkDbState = function() { return Promise.resolve(mockNewDbState); };
+
+  // 用 eval 在当前作用域创建 handler，确保 updateSyncStatus 可访问
+  var handler = eval('(async () => { ' + execHandlerBody + ' })');
+  return handler;
+}
+
+// --- 13. 执行迁移收尾：成功后执行按钮禁用 ---
+test('执行迁移成功后: btnMigrateExecute.disabled === true', function() {
+  resetSync(true);
+  // 先设置 migration_required 状态
+  updateMigrationUI('migration_required');
+  // 模拟预览成功后启用执行按钮
+  elements.btnMigrateExecute.disabled = false;
+  assert.strictEqual(getExecuteDisabled(), false, '预览后执行按钮应可用');
+
+  // 构建模拟的迁移成功报告
+  var successReport = {
+    success: true,
+    localTotal: 57,
+    cloudTotal: 19,
+    existingUidMatched: 0,
+    predictedNullUidPatch: 1,
+    successfulNullUidPatch: 1,
+    failedNullUidPatch: 0,
+    predictedIndependentUidPatch: 18,
+    successfulIndependentUidPatch: 18,
+    failedIndependentUidPatch: 0,
+    cloudToDelete: 0,
+    cloudOldDupToDelete: 0,
+    predictedDuplicateDelete: 0,
+    successfulDuplicateDelete: 0,
+    failedDuplicateDelete: 0,
+    conflictCloudPreserved: 8,
+    uncertainMatches: 8,
+    pendingUpload: 0,
+    nullRecordUidAfter: 0,
+    actualNullRecordUid: 0,
+    errors: [],
+    dbState: 'migration_required',
+    steps: [],
+    preview: false
+  };
+
+  var handler = buildExecHandler(successReport, 'constraint_not_ready');
+  return handler().then(function() {
+    // 收尾后执行按钮必须禁用
+    assert.strictEqual(getExecuteDisabled(), true, '执行成功后执行按钮必须禁用');
+    // 预览按钮应恢复可用
+    assert.strictEqual(getPreviewDisabled(), false, '预览按钮应恢复可用');
+    assert.strictEqual(elements.btnMigratePreview.textContent, '预览迁移', '预览按钮文字应恢复');
+    assert.strictEqual(elements.btnMigrateExecute.textContent, '执行迁移', '执行按钮文字应恢复');
+  });
+});
+
+// --- 14. 执行迁移收尾：失败后也必须重新预览 ---
+test('执行迁移失败后: btnMigrateExecute.disabled === true', function() {
+  resetSync(true);
+  updateMigrationUI('migration_required');
+  // 模拟预览成功后启用执行按钮
+  elements.btnMigrateExecute.disabled = false;
+  assert.strictEqual(getExecuteDisabled(), false, '预览后执行按钮应可用');
+
+  // 构建模拟的迁移失败报告
+  var failReport = {
+    success: false,
+    localTotal: 57,
+    cloudTotal: 19,
+    existingUidMatched: 0,
+    predictedNullUidPatch: 1,
+    successfulNullUidPatch: 1,
+    failedNullUidPatch: 0,
+    predictedIndependentUidPatch: 18,
+    successfulIndependentUidPatch: 17,
+    failedIndependentUidPatch: 1,
+    cloudToDelete: 0,
+    cloudOldDupToDelete: 0,
+    predictedDuplicateDelete: 0,
+    successfulDuplicateDelete: 0,
+    failedDuplicateDelete: 0,
+    conflictCloudPreserved: 8,
+    uncertainMatches: 8,
+    pendingUpload: 0,
+    nullRecordUidAfter: 1,
+    actualNullRecordUid: 1,
+    errors: ['独立补 UID 失败 (cloudId=cloud-2): simulated failure'],
+    dbState: 'migration_required',
+    steps: [],
+    preview: false
+  };
+
+  var handler = buildExecHandler(failReport, 'migration_required');
+  return handler().then(function() {
+    // 收尾后执行按钮必须禁用（失败后不得直接再次执行）
+    assert.strictEqual(getExecuteDisabled(), true, '执行失败后执行按钮必须禁用');
+    // 预览按钮应恢复可用
+    assert.strictEqual(getPreviewDisabled(), false, '预览按钮应恢复可用');
+    assert.strictEqual(elements.btnMigratePreview.textContent, '预览迁移', '预览按钮文字应恢复');
+    assert.strictEqual(elements.btnMigrateExecute.textContent, '执行迁移', '执行按钮文字应恢复');
+  });
+});
+
+// --- 15. ready 状态下按钮区域隐藏且执行按钮禁用 ---
+test('ready 状态: 按钮区域隐藏且执行按钮禁用', function() {
+  resetSync(true);
+  // 先模拟 migration_required 并启用执行按钮
+  updateMigrationUI('migration_required');
+  elements.btnMigrateExecute.disabled = false;
+  assert.strictEqual(getActionsDisplay(), 'flex');
+  assert.strictEqual(getExecuteDisabled(), false);
+
+  // 切换到 ready
+  updateMigrationUI('ready');
+  assert.strictEqual(getActionsDisplay(), 'none', 'ready 状态下按钮区域必须隐藏');
+  assert.strictEqual(getExecuteDisabled(), true, 'ready 状态下执行按钮必须禁用');
+  assert.strictEqual(getPreviewDisabled(), false, 'ready 状态下预览按钮应可用(但隐藏)');
+});
+
 // ============ 运行 ============
-console.log('\n========================================');
-console.log('迁移完成态界面行为测试');
-console.log('========================================');
-testResults.forEach(function(r) { console.log(r); });
-console.log('\n测试总数: ' + testTotal);
-console.log('通过: ' + testPassed + '，失败: ' + testFailed);
-console.log('退出码: ' + (testFailed > 0 ? 1 : 0));
-console.log('========================================');
-if (testFailed > 0) process.exit(1);
+// 先等所有异步测试完成
+asyncTests.reduce(function(p, t) {
+  return p.then(function() {
+    return t.promise.then(function() {
+      testPassed++;
+      testResults.push('PASS: ' + t.name);
+    }).catch(function(e) {
+      testFailed++;
+      testResults.push('FAIL: ' + t.name + ' - ' + (e.message || e));
+    });
+  });
+}, Promise.resolve()).then(function() {
+  console.log('\n========================================');
+  console.log('迁移完成态界面行为测试');
+  console.log('========================================');
+  testResults.forEach(function(r) { console.log(r); });
+  console.log('\n测试总数: ' + testTotal);
+  console.log('通过: ' + testPassed + '，失败: ' + testFailed);
+  console.log('退出码: ' + (testFailed > 0 ? 1 : 0));
+  console.log('========================================');
+  if (testFailed > 0) process.exit(1);
+}).catch(function(e) {
+  console.error('测试执行错误:', e);
+  process.exit(1);
+});

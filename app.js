@@ -2154,7 +2154,8 @@ function initSyncSettings() {
     }
     window._migratingData = false;
     btn.textContent = '执行迁移';
-    btn.disabled = false;
+    // 每次执行结束后都必须重新预览，禁止残留可执行状态
+    btn.disabled = true;
     previewBtn.disabled = false;
     previewBtn.textContent = '预览迁移';
   };
