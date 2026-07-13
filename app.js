@@ -216,6 +216,8 @@ function initSettingsPage() {
     const apiKey = document.getElementById('settingsApiKey').value.trim();
     const apiDomain = document.getElementById('settingsApiDomain').value.trim() || ARK_BASE_URL;
     if (!apiKey) { showToast('请输入 API Key', 'error'); return; }
+    // 二次确认：说明会发起一次最小图片生成请求
+    if (!confirm('纯前端 PWA 无法在不发起业务请求的情况下可靠验证 API Key。\n\n点击"确定"将发起一次最小图片生成请求来验证连接。\n（使用 test 作为提示词，不会生成实际有用的图片）\n\n是否继续？')) return;
     showLoading('测试连接中...');
     try {
       const result = await testConnection(apiKey, apiDomain);

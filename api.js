@@ -300,15 +300,16 @@ async function testConnection(apiKey, apiDomain) {
       },
       body: JSON.stringify({ model: 'doubao-seedream-5-0-pro-260628', prompt: 'test' })
     });
-    if (res.status === 200) return { success: true, message: '连接成功' };
-    if (res.status === 400) return { success: true, message: '连接成功（API Key 有效）' };
-    if (res.status === 401) return { success: false, message: 'API Key 无效或已过期' };
-    if (res.status === 429) return { success: false, message: '请求过于频繁，请稍后再试' };
+    if (res.status === 200) return { success: true, message: '连接成功，API Key 有效' };
+    if (res.status === 400) return { success: false, message: 'API Key 有效，但请求参数有误（400）。连接可用但无法确认完全正常' };
+    if (res.status === 401) return { success: false, message: 'API Key 无效或已过期（401）' };
+    if (res.status === 403) return { success: false, message: '无权限访问该模型（403），请检查 API Key 权限' };
+    if (res.status === 429) return { success: false, message: '请求过于频繁（429），请稍后再试' };
     let msg = 'HTTP ' + res.status;
     try { const body = await res.json(); if (body.error?.message) msg = body.error.message; } catch {}
     return { success: false, message: msg };
   } catch (e) {
-    return { success: false, message: e.message || '网络错误' };
+    return { success: false, message: '无法连接：' + (e.message || '网络错误') + '。请检查域名和网络' };
   }
 }
 
