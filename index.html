@@ -231,6 +231,16 @@
           </div>
         </div>
 
+        <div class="sync-section" id="migrationSection" style="margin-top:12px;padding:16px;background:var(--bg-tertiary);border-radius:12px;display:none;">
+          <h3 style="margin:0 0 4px 0;font-size:16px;">数据迁移</h3>
+          <p class="hint" style="margin:0 0 12px 0;">为旧记录补全唯一标识，匹配本地与云端记录，清理云端重复数据</p>
+          <div id="migrationStatus" style="font-size:13px;margin-bottom:12px;color:var(--text-muted);">点击下方按钮预览迁移</div>
+          <div class="settings-actions">
+            <button class="btn-secondary" id="btnMigratePreview">预览迁移</button>
+            <button class="btn-primary" id="btnMigrateExecute" disabled>执行迁移</button>
+          </div>
+        </div>
+
         <div class="help-section">
           <h3>使用帮助</h3>
           <div class="help-item"><strong>1. 获取 API Key</strong><p>火山引擎控制台 → 火山方舟 → API Key 管理</p></div>

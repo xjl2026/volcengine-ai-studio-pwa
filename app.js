@@ -1963,17 +1963,103 @@ function initSyncSettings() {
     hideLoading();
     showToast(result.message, result.success ? 'success' : 'error');
   };
+
+  // 迁移预览
+  document.getElementById('btnMigratePreview').onclick = async () => {
+    if (!SyncManager.isEnabled()) { showToast('请先保存同步设置', 'warning'); return; }
+    const btn = document.getElementById('btnMigratePreview');
+    btn.disabled = true; btn.textContent = '预览中...';
+    const statusEl = document.getElementById('migrationStatus');
+    statusEl.textContent = '正在扫描本地和云端记录...';
+    window._migratingData = true;
+    try {
+      const report = await SyncManager.migrateHistoryData({ preview: true });
+      if (report.success) {
+        var lines = [];
+        lines.push('本地记录: ' + report.localTotal + ' 条');
+        if (report.localMissingRecordUid > 0) lines.push('需补全 recordUid: ' + report.localMissingRecordUid + ' 条');
+        if (report.localMissingUpdatedAt > 0) lines.push('需补全 updatedAt: ' + report.localMissingUpdatedAt + ' 条');
+        lines.push('云端记录: ' + report.cloudTotal + ' 条');
+        if (report.cloudMissingRecordUid > 0) lines.push('云端缺 record_uid: ' + report.cloudMissingRecordUid + ' 条');
+        lines.push('已匹配: ' + report.matched + ' 条');
+        if (report.cloudDuplicates > 0) lines.push('云端重复组: ' + report.cloudDuplicates + ' 组（需删除 ' + report.cloudToDelete + ' 条）');
+        if (report.localToPush > 0) lines.push('需上传本地未匹配: ' + report.localToPush + ' 条');
+        if (report.errors.length > 0) lines.push('错误: ' + report.errors.length + ' 条');
+        statusEl.innerHTML = lines.join('<br>') + '<br><span style="color:var(--text-muted);font-size:12px;">预览完成，确认无误后点击执行迁移</span>';
+        document.getElementById('btnMigrateExecute').disabled = false;
+      } else {
+        statusEl.innerHTML = '<span style="color:#ff4d6d;">预览失败</span><br>' + report.errors.join('<br>');
+      }
+    } catch (e) {
+      statusEl.innerHTML = '<span style="color:#ff4d6d;">预览异常: ' + e.message + '</span>';
+    }
+    window._migratingData = false;
+    btn.disabled = false; btn.textContent = '预览迁移';
+  };
+
+  // 迁移执行
+  document.getElementById('btnMigrateExecute').onclick = async () => {
+    if (!SyncManager.isEnabled()) { showToast('请先保存同步设置', 'warning'); return; }
+    if (!confirm('确认执行迁移？这将修改本地和云端数据。建议先完成预览确认。')) return;
+    const btn = document.getElementById('btnMigrateExecute');
+    btn.disabled = true; btn.textContent = '迁移中...';
+    const previewBtn = document.getElementById('btnMigratePreview');
+    previewBtn.disabled = true;
+    const statusEl = document.getElementById('migrationStatus');
+    statusEl.textContent = '正在执行迁移...';
+    window._migratingData = true;
+    try {
+      const report = await SyncManager.migrateHistoryData({ preview: false });
+      if (report.success) {
+        var lines = [];
+        lines.push('<span style="color:#00d4aa;font-weight:600;">迁移完成</span>');
+        lines.push('本地: ' + report.localTotal + ' 条');
+        lines.push('云端: ' + report.cloudTotal + ' 条');
+        lines.push('匹配: ' + report.matched + ' 条');
+        if (report.cloudToDelete > 0) lines.push('删除重复: ' + report.cloudToDelete + ' 条');
+        if (report.localToPush > 0) lines.push('上传未匹配: ' + report.localToPush + ' 条');
+        if (report.errors.length > 0) {
+          lines.push('<span style="color:#ffb443;">错误: ' + report.errors.length + ' 条</span>');
+          for (var i = 0; i < Math.min(report.errors.length, 5); i++) {
+            lines.push('<span style="font-size:11px;color:var(--text-muted);">' + report.errors[i] + '</span>');
+          }
+        }
+        statusEl.innerHTML = lines.join('<br>');
+        showToast('迁移完成', 'success');
+        // 刷新历史列表
+        window._historyRendered = false;
+        if (document.getElementById('page-history')?.classList.contains('active')) {
+          renderHistory();
+          window._historyRendered = true;
+        }
+      } else {
+        statusEl.innerHTML = '<span style="color:#ff4d6d;">迁移失败</span><br>' + report.errors.join('<br>');
+        showToast('迁移失败', 'error');
+      }
+    } catch (e) {
+      statusEl.innerHTML = '<span style="color:#ff4d6d;">迁移异常: ' + e.message + '</span>';
+      showToast('迁移异常: ' + e.message, 'error');
+    }
+    window._migratingData = false;
+    btn.textContent = '执行迁移';
+    btn.disabled = false;
+    previewBtn.disabled = false;
+    previewBtn.textContent = '预览迁移';
+  };
 }
 
 function updateSyncStatus() {
   const el = document.getElementById('syncStatus');
   if (!el) return;
+  const migSection = document.getElementById('migrationSection');
   if (SyncManager.isEnabled()) {
     el.textContent = '同步已开启';
     el.style.color = '#00d4aa';
+    if (migSection) migSection.style.display = 'block';
   } else {
     el.textContent = '同步未开启';
     el.style.color = '#a0a0b8';
+    if (migSection) migSection.style.display = 'none';
   }
 }
 });

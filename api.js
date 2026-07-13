@@ -59,13 +59,14 @@ const Store = {
       const exists = history.find(h => h.taskId === record.taskId);
       if (exists) return exists;
     }
-    const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), createdAt: new Date().toISOString(), ...record };
+    const now = new Date().toISOString();
+    const r = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), recordUid: (crypto.randomUUID ? crypto.randomUUID() : now + '-' + Math.random().toString(36).slice(2, 10)), createdAt: now, updatedAt: now, ...record };
     history.unshift(r);
     if (history.length > 500) history.length = 500;
     await this.saveHistory(history);
     // 同步到云端
     if (window.SyncManager && SyncManager.isEnabled()) {
-      try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); }
+      try { r._syncId = await SyncManager.pushHistory(r); } catch (e) { console.warn('推送同步失败: ', e); r._syncPending = true; await this.saveHistory(history); }
     }
     return r;
   },
@@ -74,10 +75,11 @@ const Store = {
     const idx = history.findIndex(h => h.id === id);
     if (idx >= 0) {
       Object.assign(history[idx], patch);
+      history[idx].updatedAt = new Date().toISOString();
       await this.saveHistory(history);
       // 同步到云端
       if (window.SyncManager && SyncManager.isEnabled() && history[idx]._syncId) {
-        try { await SyncManager.pushHistory(history[idx]); } catch (e) { console.warn('更新同步失败: ', e); }
+        try { await SyncManager.pushHistory(history[idx]); } catch (e) { console.warn('更新同步失败: ', e); history[idx]._syncPending = true; await this.saveHistory(history); }
       }
       return history[idx];
     }
