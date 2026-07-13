@@ -468,7 +468,13 @@ const SyncManager = {
       predictedDuplicateDelete: 0, // 预计需要删除的重复数量
       successfulDuplicateDelete: 0,// 删除重复成功
       failedDuplicateDelete: 0,    // 删除重复失败
-      uncertainDetails: []         // v1.6.2: 冲突记录详情（模型、提示词摘要、时间、候选数）
+      uncertainDetails: [],        // v1.6.2: 冲突记录详情（模型、提示词摘要、时间、候选数）
+      // v1.6.4: 独立补 UID 统计
+      predictedIndependentUidPatch: 0,  // 预计需要独立补 UID 的数量
+      successfulIndependentUidPatch: 0, // 独立补 UID 成功
+      failedIndependentUidPatch: 0,     // 独立补 UID 失败
+      unmatchedCloudPreserved: 0,        // 无法匹配但保留的云端记录数
+      conflictCloudPreserved: 0          // 多候选冲突保留的云端记录数
     };
 
     try {
@@ -597,25 +603,27 @@ const SyncManager = {
       }
 
       // Step 4c: v1.6.2 收紧无 taskId 图片记录匹配
-      // 保守匹配：type+model+prompt+result完全一致+createdAt时间差60秒内+候选恰好1条
-      // 先按 (type+model+prompt+resultJSON) 分组检测冲突
+      // v1.6.4: 冲突检测也使用 getRecordModel
       var contentGroups = {};
       for (var ni = 0; ni < cloudNoTaskId.length; ni++) {
         var nrow = cloudNoTaskId[ni];
         var nRec = nrow._decrypted;
         if (!nRec) continue;
-        var key = (nRec.type || '') + '|' + (nRec.model || '') + '|' + (nRec.prompt || '') + '|' + JSON.stringify(nRec.result || []);
+        var nModel = getRecordModel(nRec);
+        var key = (nRec.type || '') + '|' + nModel + '|' + (nRec.prompt || '') + '|' + JSON.stringify(nRec.result || []);
         if (!contentGroups[key]) contentGroups[key] = [];
         contentGroups[key].push(nrow);
       }
+      // v1.6.4: 追踪多候选冲突的云端记录 ID
+      var conflictCloudIds = new Set();
       for (var ck in contentGroups) {
         if (contentGroups[ck].length > 1) {
           report.uncertainMatches += contentGroups[ck].length;
-          // 记录冲突详情
           for (var di = 0; di < contentGroups[ck].length; di++) {
+            conflictCloudIds.add(contentGroups[ck][di].id);
             var dRec = contentGroups[ck][di]._decrypted;
             report.uncertainDetails.push({
-              model: (dRec && dRec.model) || '',
+              model: getRecordModel(dRec),
               prompt: (dRec && dRec.prompt) ? dRec.prompt.substring(0, 80) : '',
               createdAt: (dRec && dRec.createdAt) || '',
               candidates: contentGroups[ck].length
@@ -745,6 +753,7 @@ const SyncManager = {
         } else if (candidates.length > 1) {
           // 多于 1 条候选：列入 uncertainMatches，不自动 PATCH
           report.uncertainMatches++;
+          conflictCloudIds.add(crow.id);
           report.uncertainDetails.push({
             model: cloudModel,
             prompt: cRec.prompt.substring(0, 80),
@@ -757,6 +766,50 @@ const SyncManager = {
 
       report.steps.push('已有 record_uid 匹配: ' + report.existingUidMatched + ' 条');
       report.steps.push('预计 PATCH record_uid: ' + report.predictedNullUidPatch + ' 条（成功 ' + report.successfulNullUidPatch + '，失败 ' + report.failedNullUidPatch + '）');
+
+      // v1.6.4 Step 5d: 独立补 UID
+      // 处理所有仍 record_uid IS NULL 且未匹配本地且不属于待删除重复的云端记录
+      // 包括多候选冲突记录 — 每条生成独立 UUID 保留
+      for (var ci = 0; ci < cloudWithoutRecordUid.length; ci++) {
+        var crow = cloudWithoutRecordUid[ci];
+        if (cloudMatched.has(crow.id)) continue;      // 已匹配本地
+        if (oldDupIds.has(crow.id)) continue;           // 属于待删除旧重复
+        if (duplicatesToDelete.some(function(r) { return r.id === crow.id; })) continue; // 属于待删除重复
+
+        // v1.6.4: crypto.randomUUID 不可用时停止迁移
+        if (!crypto.randomUUID) {
+          report.errors.push('浏览器不支持 crypto.randomUUID()，无法生成独立 UUID，迁移中止');
+          report.success = false;
+          return report;
+        }
+
+        report.predictedIndependentUidPatch++;
+
+        // 多候选冲突记录也独立补 UID，但单独统计
+        if (conflictCloudIds.has(crow.id)) {
+          report.conflictCloudPreserved++;
+        } else {
+          report.unmatchedCloudPreserved++;
+        }
+
+        if (!preview) {
+          var newUid = crypto.randomUUID();
+          try {
+            await this.patchRecordUid(crow.id, newUid);
+            report.successfulIndependentUidPatch++;
+            cloudMatched.add(crow.id);
+          } catch (e) {
+            report.failedIndependentUidPatch++;
+            report.errors.push('独立补 UID 失败 (cloudId=' + crow.id + '): ' + e.message);
+          }
+        } else {
+          report.successfulIndependentUidPatch++;
+        }
+      }
+      report.steps.push('独立补 UID: 预计 ' + report.predictedIndependentUidPatch + ' 条（成功 ' + report.successfulIndependentUidPatch + '，失败 ' + report.failedIndependentUidPatch + '）');
+      if (report.conflictCloudPreserved > 0) {
+        report.steps.push('多候选冲突独立保留: ' + report.conflictCloudPreserved + ' 条');
+      }
 
       // Step 6: 删除云端重复记录
       if (!preview) {
@@ -797,9 +850,11 @@ const SyncManager = {
         await Store.saveHistory(localHistory);
       }
 
-      // v1.6.2: 迁移后预计空值数量（仅基于预测，不混入成功/失败）
+      // v1.6.4: 迁移后预计空值数量
+      // = 空值总数 - 成功匹配补写 - 成功独立补UID - 成功删除重复
       var predictedNullAfter = report.cloudMissingRecordUid
         - report.successfulNullUidPatch
+        - report.successfulIndependentUidPatch
         - report.successfulDuplicateDelete;
       if (predictedNullAfter < 0) predictedNullAfter = 0;
       report.nullRecordUidAfter = predictedNullAfter;

@@ -1,8 +1,8 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.3';
-const APP_BUILD = '2026-07-13 14:25:00';
+const APP_VERSION = '1.6.4';
+const APP_BUILD = '2026-07-13 15:20:00';
 
 let imgMode = 't2i';
 let vidMode = 't2v'; // t2v / i2v
@@ -2089,17 +2089,29 @@ function initSyncSettings() {
         if (report.localMissingUpdatedAt > 0) lines.push('需补全 updatedAt: ' + report.localMissingUpdatedAt + ' 条');
         lines.push('云端记录: ' + report.cloudTotal + ' 条');
         if (report.cloudMissingRecordUid > 0) lines.push('云端缺 record_uid: ' + report.cloudMissingRecordUid + ' 条');
-        lines.push('已有 record_uid 匹配: ' + report.existingUidMatched + ' 条');
-        lines.push('预计 PATCH record_uid: ' + report.predictedNullUidPatch + ' 条');
+        lines.push('唯一匹配并沿用本地 recordUid: ' + report.existingUidMatched + ' 条');
+        lines.push('预计 PATCH record_uid (匹配本地): ' + report.predictedNullUidPatch + ' 条');
+        if (report.predictedIndependentUidPatch > 0) {
+          lines.push('无法匹配、将分配独立 recordUid: ' + report.predictedIndependentUidPatch + ' 条');
+        }
+        if (report.conflictCloudPreserved > 0) {
+          lines.push('<span style="color:#ffb443;">多候选冲突、将独立保留: ' + report.conflictCloudPreserved + ' 条</span>');
+        }
         if (report.cloudDuplicates > 0) lines.push('已有 record_uid 重复组: ' + report.cloudDuplicates + ' 组（需删除 ' + report.cloudToDelete + ' 条）');
         if (report.cloudOldDuplicates > 0) lines.push('旧版 taskId 重复组: ' + report.cloudOldDuplicates + ' 组（需删除 ' + report.cloudOldDupToDelete + ' 条）');
-        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">多候选内容冲突: ' + report.uncertainMatches + ' 条（不自动匹配、不自动删除）</span>');
-        if (report.predictedDuplicateDelete > 0) lines.push('预计删除重复: ' + report.predictedDuplicateDelete + ' 条');
+        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">多候选内容冲突: ' + report.uncertainMatches + ' 条（不自动匹配、不自动删除，独立补UID保留）</span>');
+        if (report.predictedDuplicateDelete > 0) lines.push('明确待删除旧重复: ' + report.predictedDuplicateDelete + ' 条');
         if (report.pendingUpload > 0) lines.push('<span style="color:#3a8aff;">待阶段B约束完成后上传: ' + report.pendingUpload + ' 条</span>');
         lines.push('<strong>迁移后预计 record_uid 为空: ' + report.nullRecordUidAfter + ' 条</strong>');
         if (report.errors.length > 0) lines.push('错误: ' + report.errors.length + ' 条');
-        statusEl.innerHTML = lines.join('<br>') + '<br><span style="color:var(--text-muted);font-size:12px;">预览完成，确认无误后点击执行迁移</span>';
-        document.getElementById('btnMigrateExecute').disabled = false;
+        // v1.6.4: 只有预计空值为 0 时才允许执行迁移
+        if (report.nullRecordUidAfter === 0) {
+          statusEl.innerHTML = lines.join('<br>') + '<br><span style="color:#00d4aa;font-size:12px;">预计空值为 0，可以执行迁移</span>';
+          document.getElementById('btnMigrateExecute').disabled = false;
+        } else {
+          statusEl.innerHTML = lines.join('<br>') + '<br><span style="color:#ffb443;font-size:12px;">预计空值不为 0，请检查错误后重新预览</span>';
+          document.getElementById('btnMigrateExecute').disabled = true;
+        }
       } else {
         statusEl.innerHTML = '<span style="color:#ff4d6d;">预览失败</span><br>' + report.errors.join('<br>');
       }
@@ -2128,25 +2140,30 @@ function initSyncSettings() {
         lines.push('<span style="color:#00d4aa;font-weight:600;">迁移执行完成</span>');
         lines.push('本地: ' + report.localTotal + ' 条');
         lines.push('云端: ' + report.cloudTotal + ' 条');
-        lines.push('已有 record_uid 匹配: ' + report.existingUidMatched + ' 条');
-        lines.push('PATCH record_uid: 预计 ' + report.predictedNullUidPatch + '，成功 ' + report.successfulNullUidPatch + '，失败 ' + report.failedNullUidPatch);
+        lines.push('唯一匹配沿用本地 recordUid: ' + report.existingUidMatched + ' 条');
+        lines.push('PATCH record_uid (匹配): 预计 ' + report.predictedNullUidPatch + '，成功 ' + report.successfulNullUidPatch + '，失败 ' + report.failedNullUidPatch);
+        if (report.predictedIndependentUidPatch > 0) {
+          lines.push('独立补 UID: 预计 ' + report.predictedIndependentUidPatch + '，成功 ' + report.successfulIndependentUidPatch + '，失败 ' + report.failedIndependentUidPatch);
+        }
         if (report.cloudToDelete > 0 || report.cloudOldDupToDelete > 0) {
           lines.push('删除重复: 预计 ' + report.predictedDuplicateDelete + '，成功 ' + report.successfulDuplicateDelete + '，失败 ' + report.failedDuplicateDelete);
         }
-        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">多候选内容冲突: ' + report.uncertainMatches + ' 条（未自动处理）</span>');
+        if (report.conflictCloudPreserved > 0) lines.push('<span style="color:#ffb443;">多候选冲突独立保留: ' + report.conflictCloudPreserved + ' 条</span>');
+        if (report.uncertainMatches > 0) lines.push('<span style="color:#ffb443;">多候选内容冲突: ' + report.uncertainMatches + ' 条（已独立补UID保留）</span>');
         if (report.pendingUpload > 0) lines.push('<span style="color:#3a8aff;">待阶段B约束完成后上传: ' + report.pendingUpload + ' 条</span>');
         lines.push('迁移后预计空值: ' + report.nullRecordUidAfter + ' 条');
         if (report.actualNullRecordUid >= 0) {
           lines.push('<strong>执行后实际查询 record_uid 为空: ' + report.actualNullRecordUid + ' 条</strong>');
-          if (report.actualNullRecordUid === 0 && report.failedNullUidPatch === 0 && report.failedDuplicateDelete === 0) {
-            lines.push('<span style="color:#00d4aa;">实际空值为 0，无失败记录，可进入阶段B</span>');
-          } else if (report.actualNullRecordUid === 0 && (report.failedNullUidPatch > 0 || report.failedDuplicateDelete > 0)) {
+          var hasFailures = report.failedNullUidPatch > 0 || report.failedDuplicateDelete > 0 || report.failedIndependentUidPatch > 0;
+          if (report.actualNullRecordUid === 0 && !hasFailures) {
+            lines.push('<span style="color:#00d4aa;">阶段A迁移完成，可以准备阶段B约束</span>');
+          } else if (report.actualNullRecordUid === 0 && hasFailures) {
             lines.push('<span style="color:#ffb443;">实际空值为 0，但存在失败操作，请检查错误后再确认</span>');
           } else {
-            lines.push('<span style="color:#ffb443;">仍有 ' + report.actualNullRecordUid + ' 条实际空值，不可执行阶段B SQL</span>');
+            lines.push('<span style="color:#ff4d6d;">仍有 ' + report.actualNullRecordUid + ' 条实际空值，不可执行阶段B SQL</span>');
           }
         } else {
-          lines.push('<span style="color:#ffb443;">执行后查询实际空值失败，请手动检查后再决定</span>');
+          lines.push('<span style="color:#ff4d6d;">执行后查询实际空值失败，不得执行 NOT NULL 或 UNIQUE</span>');
         }
         if (report.errors.length > 0) {
           lines.push('<span style="color:#ffb443;">错误: ' + report.errors.length + ' 条</span>');
