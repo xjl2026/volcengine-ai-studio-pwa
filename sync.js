@@ -107,12 +107,6 @@ const SyncManager = {
     return text ? JSON.parse(text) : null;
   },
 
-  // 阶段B：pushHistory 兼容别名（内部委托 upsertHistory，B2 删除）
-  async pushHistory(record) {
-    var result = await this.upsertHistory(record);
-    return result ? result.syncId : null;
-  },
-
   // 阶段B：基于 on_conflict 的 Upsert（需要 UNIQUE 约束）
   async upsertHistory(record) {
     if (!this.isEnabled()) return null;
@@ -432,9 +426,10 @@ const SyncManager = {
         for (var i = 0; i < localHistory.length; i++) {
           if (!localMatched.has(i) && !localHistory[i]._syncId) {
             try {
-              var syncId = await this.pushHistory(localHistory[i]);
-              if (syncId) {
-                localHistory[i]._syncId = syncId;
+              var result = await this.upsertHistory(localHistory[i]);
+              if (result && result.syncId) {
+                localHistory[i]._syncId = result.syncId;
+                localHistory[i]._cloudUpdatedAt = result.cloudUpdatedAt;
                 localToPush++;
               }
             } catch (e) {
