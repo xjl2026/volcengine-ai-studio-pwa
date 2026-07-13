@@ -57,32 +57,103 @@ document.addEventListener('DOMContentLoaded', async () => {
   await initSync();
   // 恢复未完成的视频任务（页面重新加载时）
   restorePendingVideoTask();
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').then(reg => {
-      // 检测到新 SW 就等它激活，然后刷新页面
-      reg.addEventListener('updatefound', () => {
-        const newSW = reg.installing;
-        if (newSW) {
-          newSW.addEventListener('statechange', () => {
-            if (newSW.state === 'activated' && navigator.serviceWorker.controller) {
-              location.reload();
-            }
-          });
-        }
-      });
-      // 每次打开页面时主动检查更新
-      reg.update();
-    }).catch(() => {});
+// SW 更新保护
+let swUpdateState = {
+  hasUpdate: false,
+  waitingSW: null,
+  isSafeToUpdate: true,
+  pendingReasons: [],
+  refreshTriggered: false
+};
+
+function checkSafeToUpdate() {
+  swUpdateState.pendingReasons = [];
+  if (imageGenState.isGenerating) swUpdateState.pendingReasons.push('图片生成进行中');
+  if (window._currentPollingTaskId) swUpdateState.pendingReasons.push('视频任务进行中');
+  if (window._migratingData) swUpdateState.pendingReasons.push('数据迁移进行中');
+  if (window._syncWriting) swUpdateState.pendingReasons.push('同步写入进行中');
+  swUpdateState.isSafeToUpdate = swUpdateState.pendingReasons.length === 0;
+  return swUpdateState.isSafeToUpdate;
+}
+
+function showUpdateNotification(msg) {
+  let bar = document.getElementById('swUpdateBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'swUpdateBar';
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#3a8aff;color:#fff;text-align:center;padding:8px;font-size:13px;z-index:9999;cursor:pointer;';
+    document.body.appendChild(bar);
   }
-  // 页面从后台切回前台时也检查 SW 更新
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      restorePendingVideoTask();
-      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.getRegistration().then(reg => reg && reg.update());
+  bar.textContent = msg;
+  bar.onclick = applyUpdate;
+}
+
+function applyUpdate() {
+  if (swUpdateState.refreshTriggered) return;
+  checkSafeToUpdate();
+  if (!swUpdateState.isSafeToUpdate) {
+    showToast(swUpdateState.pendingReasons[0] + '，无法刷新', 'warning');
+    return;
+  }
+  if (imageGenState.isGenerating) {
+    if (!confirm('刷新将中断当前图片生成请求，已提交的请求可能仍在服务端处理。确定要刷新吗？')) return;
+  }
+  swUpdateState.refreshTriggered = true;
+  if (swUpdateState.waitingSW) {
+    swUpdateState.waitingSW.postMessage({ type: 'SKIP_WAITING' });
+  } else {
+    location.reload();
+  }
+}
+
+// SW 注册
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const newSW = reg.installing;
+      if (newSW) {
+        newSW.addEventListener('statechange', () => {
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+            swUpdateState.hasUpdate = true;
+            swUpdateState.waitingSW = newSW;
+            checkSafeToUpdate();
+            if (swUpdateState.isSafeToUpdate) {
+              showUpdateNotification('发现新版本，点击刷新更新');
+            } else {
+              showUpdateNotification('发现新版本，' + swUpdateState.pendingReasons[0] + '，完成后可刷新');
+            }
+          }
+        });
       }
+    });
+    reg.update();
+  }).catch(() => {});
+
+  // controllerchange 只触发一次刷新
+  let controllerChangeHandled = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!controllerChangeHandled && swUpdateState.refreshTriggered) {
+      controllerChangeHandled = true;
+      location.reload();
     }
   });
+}
+
+// 页面从后台切回前台时检查 SW 更新
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    restorePendingVideoTask();
+    if (swUpdateState.hasUpdate && !swUpdateState.refreshTriggered) {
+      checkSafeToUpdate();
+      if (swUpdateState.isSafeToUpdate) {
+        showUpdateNotification('发现新版本，点击刷新更新');
+      }
+    }
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.getRegistration().then(reg => reg && reg.update());
+    }
+  }
+});
 
 // ============ 导航 ============
 function initNav() {
