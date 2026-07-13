@@ -1903,103 +1903,38 @@ async function initSync() {
   }
 }
 
+// mergeCloudHistory 从 merge-cloud-history.js 加载（纯函数，可独立测试）
+// syncHistoryFromCloud 调用该函数后再保存数据
+
 // readOnly = true 时只拉取云端记录合并到本地，不向上行写入
 async function syncHistoryFromCloud(readOnly) {
   if (!SyncManager.isEnabled()) return;
   try {
     const cloudRecords = await SyncManager.pullHistory();
     const localHistory = await Store.getHistory();
-    let needSave = false;
 
-    // 构建本地 recordUid 索引
-    var localByRecordUid = {};
-    // v1.6.5: 同时构建 _syncId 索引，用于 recordUid 缺失时的 fallback 匹配
-    var localBySyncId = {};
-    for (var i = 0; i < localHistory.length; i++) {
-      if (localHistory[i].recordUid) {
-        localByRecordUid[localHistory[i].recordUid] = localHistory[i];
-      }
-      if (localHistory[i]._syncId) {
-        localBySyncId[localHistory[i]._syncId] = localHistory[i];
-      }
-    }
+    var dbState = null;
+    try { dbState = SyncManager._dbState; } catch (e) {}
 
-    // 处理云端记录
-    var cloudRecordUids = new Set();
-    var cloudSyncIds = new Set();
-    for (var ci = 0; ci < cloudRecords.length; ci++) {
-      var cr = cloudRecords[ci];
-      // v1.6.5: pullHistory 已将云端 record_uid 写入 recordUid，直接使用
-      var crUid = cr.recordUid || cr._cloudRecordUid;
-      if (crUid) cloudRecordUids.add(crUid);
-      if (cr._syncId) cloudSyncIds.add(cr._syncId);
+    var result = mergeCloudHistory(localHistory, cloudRecords, {
+      readOnly: readOnly,
+      dbState: dbState
+    });
 
-      // v1.6.5: 先按 recordUid 匹配，再按 _syncId fallback 匹配
-      var localRecord = crUid ? localByRecordUid[crUid] : null;
-      if (!localRecord && cr._syncId) {
-        localRecord = localBySyncId[cr._syncId] || null;
-      }
-
-      // v1.6.5: readOnly 模式下，跳过迁移前无 UID 且无 _syncId 的云端记录
-      // 这些记录会在迁移获得 record_uid 后再正常同步
-      if (readOnly && !crUid && !localRecord && !cr._syncId) {
-        continue;
-      }
-
-      if (cr._cloudIsDeleted === true) {
-        if (localRecord && !localRecord._isDeleted) {
-          localRecord._isDeleted = true;
-          localRecord._deletedAt = cr._cloudUpdatedAt || new Date().toISOString();
-          localRecord._deletePending = false;
-          needSave = true;
-        }
-        continue;
-      }
-
-      if (!localRecord) {
-        var newRec = { ...cr };
-        delete newRec._cloudIsDeleted;
-        // v1.6.5: 确保新记录的 recordUid 来自云端 record_uid
-        if (crUid) {
-          newRec.recordUid = crUid;
-        }
-        newRec._cloudUpdatedAt = cr._cloudUpdatedAt;
-        localHistory.push(newRec);
-        if (crUid) localByRecordUid[crUid] = newRec;
-        if (newRec._syncId) localBySyncId[newRec._syncId] = newRec;
-        needSave = true;
-        continue;
-      }
-
-      // 本地有对应记录
-      if (!localRecord._syncPending) {
-        Object.assign(localRecord, cr);
-        delete localRecord._cloudIsDeleted;
-        // v1.6.5: 确保匹配记录的 recordUid 同步
-        if (crUid) localRecord.recordUid = crUid;
-        localRecord._cloudUpdatedAt = cr._cloudUpdatedAt;
-        needSave = true;
-      } else {
-        if (localRecord._cloudUpdatedAt && cr._cloudUpdatedAt &&
-            localRecord._cloudUpdatedAt !== cr._cloudUpdatedAt) {
-          localRecord._syncConflict = true;
-          needSave = true;
-        }
-      }
-    }
+    var needSave = result.addedCount > 0 || result.updatedCount > 0;
 
     // 上传本地有但云端没有的记录（仅在非 readOnly 模式下）
     if (!readOnly) {
-      for (var i = 0; i < localHistory.length; i++) {
-        var rec = localHistory[i];
+      for (var i = 0; i < result.history.length; i++) {
+        var rec = result.history[i];
         if (rec._isDeleted) continue;
-        if (!rec.recordUid || cloudRecordUids.has(rec.recordUid)) continue;
+        if (!rec.recordUid || result.cloudRecordUids.has(rec.recordUid)) continue;
         if (!rec._syncId) {
           try {
-            var result = await SyncManager.upsertHistory(rec);
-            if (result) {
-              rec._syncId = result.syncId;
-              rec._cloudUpdatedAt = result.cloudUpdatedAt;
+            var upResult = await SyncManager.upsertHistory(rec);
+            if (upResult) {
+              rec._syncId = upResult.syncId;
+              rec._cloudUpdatedAt = upResult.cloudUpdatedAt;
               rec._syncPending = false;
               needSave = true;
             }
@@ -2012,10 +1947,10 @@ async function syncHistoryFromCloud(readOnly) {
       }
     } else {
       // readOnly 模式：标记未同步的记录
-      for (var i = 0; i < localHistory.length; i++) {
-        var rec = localHistory[i];
+      for (var i = 0; i < result.history.length; i++) {
+        var rec = result.history[i];
         if (rec._isDeleted) continue;
-        if (!rec.recordUid || cloudRecordUids.has(rec.recordUid)) continue;
+        if (!rec.recordUid || result.cloudRecordUids.has(rec.recordUid)) continue;
         if (!rec._syncId) {
           rec._syncPending = true;
           needSave = true;
@@ -2023,10 +1958,10 @@ async function syncHistoryFromCloud(readOnly) {
       }
     }
 
-    localHistory.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-    if (localHistory.length > 500) localHistory.length = 500;
+    result.history.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    if (result.history.length > 500) result.history.length = 500;
     if (needSave) {
-      await Store.saveHistory(localHistory);
+      await Store.saveHistory(result.history);
       window._historyRendered = false;
       if (document.getElementById('page-history')?.classList.contains('active')) {
         renderHistory();

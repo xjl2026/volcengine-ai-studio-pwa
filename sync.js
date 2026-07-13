@@ -856,10 +856,12 @@ const SyncManager = {
 
       // v1.6.4: 迁移后预计空值数量
       // = 空值总数 - 成功匹配补写 - 成功独立补UID - 成功删除重复
+      // 预览模式: 使用 predictedDuplicateDelete（未实际删除但预计会删除）
+      var effectiveDuplicateDelete = preview ? report.predictedDuplicateDelete : report.successfulDuplicateDelete;
       var predictedNullAfter = report.cloudMissingRecordUid
         - report.successfulNullUidPatch
         - report.successfulIndependentUidPatch
-        - report.successfulDuplicateDelete;
+        - effectiveDuplicateDelete;
       if (predictedNullAfter < 0) predictedNullAfter = 0;
       report.nullRecordUidAfter = predictedNullAfter;
       report.steps.push('迁移后预计 record_uid 为空: ' + predictedNullAfter + ' 条');
