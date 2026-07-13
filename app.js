@@ -22,6 +22,29 @@ let imgAbortController = null;
 window._currentPollingTaskId = null;
 window._restoringTask = false;
 
+// 统一按钮状态管理
+const imageGenState = { isGenerating: false };
+const videoGenState = { isGenerating: false };
+
+function refreshGenerateButtonState() {
+  // 图片按钮
+  const imgBtn = document.getElementById('btnGenImage');
+  if (imgBtn) {
+    const model = document.getElementById('imgModel');
+    const mi = model ? IMAGE_MODELS.find(m => m.id === model.value) : null;
+    const maxRef = mi ? mi.caps.maxRefImages : 14;
+    const overLimit = (imgMode === 'i2i' || imgMode === 'fusion') && imgRefImages.length > maxRef;
+    imgBtn.disabled = imageGenState.isGenerating || overLimit;
+    if (imageGenState.isGenerating) imgBtn.textContent = '生成中...';
+    else imgBtn.textContent = '生成图片';
+  }
+  // 视频按钮
+  const vidBtn = document.getElementById('btnGenVideo');
+  if (vidBtn) {
+    vidBtn.disabled = videoGenState.isGenerating;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   initNav();
   initImagePage();
@@ -361,12 +384,11 @@ function updateImageModeUI() {
     if (currentCount > maxRef) {
       if (uploadArea) uploadArea.style.borderColor = 'var(--danger)';
       if (span) span.textContent = '已选' + currentCount + '张，当前模型最多' + maxRef + '张，请删除' + (currentCount - maxRef) + '张';
-      document.getElementById('btnGenImage').disabled = true;
     } else {
       if (uploadArea) uploadArea.style.borderColor = '';
       if (span) span.textContent = '点击选择图片（最多' + maxRef + '张）';
-      document.getElementById('btnGenImage').disabled = false;
     }
+    refreshGenerateButtonState();
   }
 
   switch (imgMode) {
@@ -418,6 +440,7 @@ async function doImageGenerate(params, prompt, isRetry) {
   const btn = document.getElementById('btnGenImage');
   // 防双击
   if (btn.disabled && !isRetry) return;
+  imageGenState.isGenerating = true;
   btn.disabled = true; btn.textContent = '生成中...';
   imgAbortController = new AbortController();
 
@@ -457,7 +480,7 @@ async function doImageGenerate(params, prompt, isRetry) {
       showToast('网络异常，请谨慎重试', 'error');
     }
   }
-  finally { btn.disabled = false; btn.textContent = '生成图片'; imgAbortController = null; }
+  finally { imageGenState.isGenerating = false; btn.disabled = false; btn.textContent = '生成图片'; imgAbortController = null; }
 }
 
 function getImgModeLabel(m) { return { t2i: '文生图', i2i: '图生图', fusion: '多图融合', sequential: '组图' }[m] || m; }
@@ -802,6 +825,7 @@ async function handleVideoGenerate() {
   };
 
   const btn = document.getElementById('btnGenVideo');
+  videoGenState.isGenerating = true;
   btn.disabled = true; btn.textContent = '提交中...';
   setVideoFormDisabled(true);
   renderVideoTaskStatus('queued', '任务提交中...', 0);
@@ -868,7 +892,7 @@ async function handleVideoGenerate() {
   } catch (e) {
     renderVideoTaskStatus('failed', e.message, 0);
     showToast('错误: ' + e.message, 'error');
-  } finally { btn.disabled = false; btn.textContent = '生成视频'; setVideoFormDisabled(false); }
+  } finally { videoGenState.isGenerating = false; btn.disabled = false; btn.textContent = '生成视频'; setVideoFormDisabled(false); }
 }
 
 function getVidModeLabel(m) { return { 't2v': '文生视频', 'i2v': '图生视频' }[m] || m; }
