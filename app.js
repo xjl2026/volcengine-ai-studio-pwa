@@ -614,8 +614,8 @@ function updateVideoModeUI() {
     const mi = VIDEO_MODELS.find(m => m.id === model);
     if (mi) {
       const caps = mi.caps;
-      // 改动 13: 1.0 Pro Fast 不支持尾帧
-      const supportsTail = mi.id !== 'doubao-seedance-1-0-pro-fast-251015';
+      // 使用 caps.supportsLastFrame 判断尾帧支持
+      const supportsTail = caps.supportsLastFrame !== false;
       tf.style.display = supportsTail ? 'block' : 'none';
       if (!supportsTail && vidTailUploadCtrl) vidTailUploadCtrl.clear();
       // 参考图/视频/音频 按 caps 显示
@@ -655,26 +655,105 @@ function setVideoFormDisabled(disabled) {
   });
 }
 
+// 统一素材校验
+function validateVideoMedia(mode, mediaState, caps) {
+  if (mode === 't2v') return { valid: true };
+
+  if (mode === 'i2v') {
+    const hasFirst = mediaState.firstFrameImages.length > 0;
+    const hasTail = mediaState.tailFrameImages.length > 0;
+    const hasRefImg = mediaState.refImages.length > 0;
+    const hasRefVid = mediaState.refVideoUrls.length > 0;
+    const hasRefAud = mediaState.refAudios.length > 0;
+    const hasFrame = hasFirst || hasTail;
+    const hasRef = hasRefImg || hasRefVid || hasRefAud;
+
+    // 1. 无任何素材
+    if (!hasFrame && !hasRef)
+      return { valid: false, msg: '请至少添加一种素材' };
+
+    // 2. 首尾帧模式和多模态参考模式不能混用
+    if (hasFrame && hasRef)
+      return { valid: false, msg: '首帧/尾帧与参考媒体不能同时使用。请保留其中一组，移除另一组后再提交。' };
+
+    // 3. 尾帧不能单独使用
+    if (hasTail && !hasFirst)
+      return { valid: false, msg: '尾帧不能单独使用，请先添加首帧' };
+
+    // 4. 首帧最多1张
+    if (hasFirst && mediaState.firstFrameImages.length > 1)
+      return { valid: false, msg: '首帧最多1张图片' };
+
+    // 5. 尾帧最多1张
+    if (hasTail && mediaState.tailFrameImages.length > 1)
+      return { valid: false, msg: '尾帧最多1张图片' };
+
+    // 6. 当前模型是否支持首帧
+    if (hasFirst && (!caps || caps.supportsFirstFrame === false))
+      return { valid: false, msg: '当前模型不支持首帧输入' };
+
+    // 7. 当前模型是否支持尾帧
+    if (hasTail && (!caps || caps.supportsLastFrame === false))
+      return { valid: false, msg: '当前模型不支持尾帧输入' };
+
+    // 8. 模型是否支持参考视频
+    if (hasRefVid && (!caps || !caps.referenceVideo))
+      return { valid: false, msg: '当前模型不支持参考视频' };
+
+    // 9. 模型是否支持参考音频
+    if (hasRefAud && (!caps || !caps.referenceAudio))
+      return { valid: false, msg: '当前模型不支持参考音频' };
+
+    // 10. 参考图数量上限
+    if (hasRefImg && caps && caps.maxRefImages &&
+        mediaState.refImages.length > caps.maxRefImages)
+      return { valid: false, msg: '参考图最多' + caps.maxRefImages + '张，当前' + mediaState.refImages.length + '张' };
+
+    // 11. 参考视频数量上限
+    if (hasRefVid && caps && caps.maxRefVideos &&
+        mediaState.refVideoUrls.length > caps.maxRefVideos)
+      return { valid: false, msg: '参考视频最多' + caps.maxRefVideos + '个，当前' + mediaState.refVideoUrls.length + '个' };
+
+    // 12. 参考音频数量上限
+    if (hasRefAud && caps && caps.maxRefAudios &&
+        mediaState.refAudios.length > caps.maxRefAudios)
+      return { valid: false, msg: '参考音频最多' + caps.maxRefAudios + '段，当前' + mediaState.refAudios.length + '段' };
+
+    // 13. 参考音频不能单独使用
+    if (hasRefAud && !hasRefImg && !hasRefVid)
+      return { valid: false, msg: '参考音频不能单独使用，请至少添加一张参考图或一个参考视频' };
+
+    return { valid: true };
+  }
+
+  return { valid: true };
+}
+
 async function handleVideoGenerate() {
   const config = await Store.getConfig();
   if (!config.apiKey) { showToast('请先配置 API Key', 'warning'); switchPage('settings'); return; }
   const prompt = document.getElementById('vidPrompt').value.trim();
   if (!prompt) { showToast('请输入提示词', 'warning'); return; }
-  if (vidMode === 'i2v' && vidFirstImage.length === 0 && vidTailImage.length === 0 && vidRefImages.length === 0) { showToast('请至少上传一张图片', 'warning'); return; }
 
   const model = document.getElementById('vidModel').value;
   const mi = VIDEO_MODELS.find(m => m.id === model);
   if (!mi) return;
   const caps = mi.caps;
 
-  // 改动 12: seed=0 不被当作未设置
-  const seedRaw = document.getElementById('vidSeed').value.trim();
-
-  // 首帧/尾帧与参考媒体互斥 —— API 不允许混用
-  const hasFirstOrLastFrame = (vidFirstImage.length > 0 || vidTailImage.length > 0);
-  const hasRefMedia = (vidRefImages.length > 0 || vidRefVideoUrls.length > 0 || vidRefAudios.length > 0);
-  if (hasFirstOrLastFrame && hasRefMedia) {
-    showToast('首帧/尾帧与参考媒体不能同时使用，已自动忽略参考媒体', 'warning');
+  // 统一素材校验
+  if (vidMode === 'i2v') {
+    const mediaState = {
+      firstFrameImages: vidFirstImage,
+      tailFrameImages: vidTailImage,
+      refImages: vidRefImages,
+      refVideoUrls: vidRefVideoUrls,
+      refAudios: vidRefAudios
+    };
+    const validation = validateVideoMedia(vidMode, mediaState, caps);
+    if (!validation.valid) {
+      showToast(validation.msg, 'warning');
+      return;
+    }
   }
 
   const params = {
