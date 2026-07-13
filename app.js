@@ -352,12 +352,29 @@ function updateImageModeUI() {
   const mi = IMAGE_MODELS.find(m => m.id === model);
   const maxRef = mi ? mi.caps.maxRefImages : 14;
 
+  // 动态更新上传限制
+  if (imgUploadCtrl) {
+    imgUploadCtrl.setMax(maxRef);
+    const currentCount = imgUploadCtrl.getCount();
+    const uploadArea = document.getElementById('imgUploadArea');
+    const span = uploadArea ? uploadArea.querySelector('span') : null;
+    if (currentCount > maxRef) {
+      if (uploadArea) uploadArea.style.borderColor = 'var(--danger)';
+      if (span) span.textContent = '已选' + currentCount + '张，当前模型最多' + maxRef + '张，请删除' + (currentCount - maxRef) + '张';
+      document.getElementById('btnGenImage').disabled = true;
+    } else {
+      if (uploadArea) uploadArea.style.borderColor = '';
+      if (span) span.textContent = '点击选择图片（最多' + maxRef + '张）';
+      document.getElementById('btnGenImage').disabled = false;
+    }
+  }
+
   switch (imgMode) {
     case 't2i': refGroup.style.display = 'none'; maxGroup.style.display = 'none'; break;
     case 'i2i': refGroup.style.display = 'block'; maxGroup.style.display = 'none';
-      document.querySelector('#imgUploadArea span').textContent = '点击选择图片'; break;
+      break;
     case 'fusion': refGroup.style.display = 'block'; maxGroup.style.display = 'none';
-      document.querySelector('#imgUploadArea span').textContent = '点击选择多张图片'; break;
+      break;
     case 'sequential': refGroup.style.display = 'none'; maxGroup.style.display = 'block'; break;
   }
   if (imgUploadCtrl && (imgMode === 't2i' || imgMode === 'sequential')) imgUploadCtrl.clear();
@@ -369,6 +386,11 @@ async function handleImageGenerate() {
   const prompt = document.getElementById('imgPrompt').value.trim();
   if (!prompt) { showToast('请输入提示词', 'warning'); return; }
   if ((imgMode === 'i2i' || imgMode === 'fusion') && imgRefImages.length === 0) { showToast('请上传参考图', 'warning'); return; }
+  // 最终兜底校验：参考图数量不超限
+  if ((imgMode === 'i2i' || imgMode === 'fusion') && caps.maxRefImages && imgRefImages.length > caps.maxRefImages) {
+    showToast('参考图最多' + caps.maxRefImages + '张，当前' + imgRefImages.length + '张，请删除多余图片', 'warning');
+    return;
+  }
 
   const model = document.getElementById('imgModel').value;
   const mi = IMAGE_MODELS.find(m => m.id === model);
@@ -1038,7 +1060,13 @@ function initUploadArea(areaId, inputId, previewId, maxFiles, onChange) {
     });
   }
 
-  return { clear: () => { files = []; renderPreview(); if (onChange) onChange([]); }, getFiles: () => files.map(f => f.base64) };
+  return {
+    clear: () => { files = []; renderPreview(); if (onChange) onChange([]); },
+    getFiles: () => files.map(f => f.base64),
+    setMax: (newMax) => { maxFiles = newMax; },
+    getMax: () => maxFiles,
+    getCount: () => files.length
+  };
 }
 window.initUploadArea = initUploadArea;
 
