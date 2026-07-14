@@ -851,6 +851,18 @@ function validateVideoMedia(mode, mediaState, caps) {
 
 async function handleVideoGenerate() {
   const btn = document.getElementById('btnGenVideo');
+
+  // 必须在任何 await 和 try/finally 之前抢占生成锁
+  if (videoGenState.isGenerating) return;
+  videoGenState.isGenerating = true;
+
+  // 锁抢占后立即设置 UI 禁用状态，避免状态管理散落两处
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '提交中...';
+  }
+  setVideoFormDisabled(true);
+
   try {
     const config = await Store.getConfig();
     if (!config.apiKey) { showToast('请先配置 API Key', 'warning'); switchPage('settings'); return; }
@@ -906,11 +918,6 @@ async function handleVideoGenerate() {
       caps
     };
 
-    // 防重复提交
-    if (videoGenState.isGenerating) return;
-    videoGenState.isGenerating = true;
-    btn.disabled = true; btn.textContent = '提交中...';
-    setVideoFormDisabled(true);
     renderVideoTaskStatus('queued', '任务提交中...', 0);
 
     // 历史记录参数（复用于 pending 记录和成功后更新）
@@ -933,7 +940,7 @@ async function handleVideoGenerate() {
     savePendingVideoTask(taskId, vidMode, prompt, pendingRecord.id, historyParams);
 
     showToast('任务已提交，生成中...', 'success');
-    btn.textContent = '生成中...';
+    if (btn) btn.textContent = '生成中...';
     renderVideoTaskStatus('running', '视频生成中... 预计 1-3 分钟', 5, 0);
 
     // 改动 3: 并发控制
@@ -981,7 +988,10 @@ async function handleVideoGenerate() {
   } finally {
     videoGenState.isGenerating = false;
     window._currentPollingTaskId = null;
-    btn.disabled = false; btn.textContent = '生成视频';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '生成视频';
+    }
     setVideoFormDisabled(false);
   }
 }

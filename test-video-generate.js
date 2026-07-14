@@ -83,6 +83,8 @@ var savedHistoryUpdate = null;
 var submitVideoCallCount = 0;
 var lastSubmitParams = null;
 var pollVideoCallCount = 0;
+var setVideoFormDisabledCallCount = 0;
+var setVideoFormDisabledLastArg = null;
 
 var mockConfig = { apiKey: 'test-key', apiDomain: 'https://ark.cn-beijing.volces.com' };
 
@@ -93,7 +95,7 @@ function renderVideoResult() {}
 function renderVideoTimeout() {}
 function notifyTaskComplete() {}
 function switchPage() {}
-function setVideoFormDisabled() {}
+function setVideoFormDisabled(disabled) { setVideoFormDisabledCallCount++; setVideoFormDisabledLastArg = disabled; }
 function savePendingVideoTask() {}
 function clearPendingVideoTask() { global.localStorage.removeItem('volc_pending_task'); }
 function getVidModeLabel(m) { return m; }
@@ -186,6 +188,8 @@ function setupTestEnvironment(opts) {
   submitVideoResult = { success: true, data: { id: 'test-task-001' } };
   pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/video.mp4' } } };
   validateVideoMediaResult = { valid: true, msg: '' };
+  setVideoFormDisabledCallCount = 0;
+  setVideoFormDisabledLastArg = null;
   // 每次都重新赋值 mock 函数，防止被其他测试覆盖后残留
   submitVideoTask = async function(params) {
     submitVideoCallCount++;
@@ -205,11 +209,6 @@ var asyncTests = [];
 
 function test(name, fn) {
   testTotal++;
-  // 检查 fn 是否是 async function（通过原型链判断不可靠，用源码检查）
-  // 更安全的做法：对同步函数立即执行，对异步函数延迟执行
-  // 判断方法：如果 fn.length === 0 且不是 async，同步执行；
-  // 但最可靠的方式是统一存入 asyncTests，在 runner 中顺序执行
-  // 同步测试也走异步队列保证一致性
   asyncTests.push({ name: name, fn: fn });
 }
 
@@ -305,25 +304,12 @@ test('API 提交失败: 恢复按钮和 isGenerating', async function() {
 // --- 8. 轮询抛异常后清理 _currentPollingTaskId ---
 test('轮询异常: 清理 _currentPollingTaskId', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
-  var origPoll = pollVideoTask;
-  // 覆盖全局 pollVideoTask — 但由于 handler 内部直接引用函数名，
-  // 需要通过重新 eval 来替换。更简单的方式：临时修改 pollVideoResult 使其抛出
-  // 实际上 pollVideoTask 是 async function，我们可以直接覆盖它
-  // 但 eval 定义的函数引用的是当前作用域的 pollVideoTask
-  // 在 eval 作用域中 pollVideoTask 是可写的
-  // 由于 JS 函数声明会被提升，我们需要用变量来覆盖
-  
-  // 替换 pollVideoTask 的实现
-  var originalPoll = pollVideoTask;
-  // 重新定义为抛出异常的版本
+  // 替换 pollVideoTask 为抛出异常的版本
   pollVideoTask = async function() { throw new Error('网络断开'); };
-  
+
   await handleVideoGenerate();
   assert.strictEqual(global.window._currentPollingTaskId, null, '轮询异常后 _currentPollingTaskId 应为 null');
   assert.strictEqual(videoGenState.isGenerating, false, 'isGenerating 应恢复为 false');
-  
-  // 恢复
-  pollVideoTask = originalPoll;
 });
 
 // --- 9. 成功状态但没有 video_url：标记为 failed ---
@@ -346,12 +332,63 @@ test('素材校验失败: 不调用 API', async function() {
   assert.ok(toastMessages.some(function(t) { return t.msg === '请上传首帧图片'; }), '应显示校验失败提示');
 });
 
-// --- 11. 连续点击不得重复提交 ---
-test('连续点击: 不重复提交', async function() {
+// --- 11. 真实并发测试：第二次调用不得释放第一次的锁 ---
+test('并发: 第二次调用不释放第一次的锁', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
-  videoGenState.isGenerating = true;
-  await handleVideoGenerate();
-  assert.strictEqual(submitVideoCallCount, 0, 'isGenerating=true 时不应重复提交');
+
+  // 用可控的 pending Promise 控制 submitVideoTask 的完成时机
+  var resolveSubmit;
+  submitVideoTask = async function(params) {
+    submitVideoCallCount++;
+    lastSubmitParams = params;
+    // 返回一个不会自动完成的 Promise，等待外部 resolve
+    return new Promise(function(resolve) { resolveSubmit = resolve; });
+  };
+  // pollVideoTask 不会被调用到（submitVideoTask 未完成），但以防万一设个默认值
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+
+  // 启动第一次调用（不 await，让它在 submitVideoTask 处挂起）
+  var firstCall = handleVideoGenerate();
+
+  // 让微任务队列跑一轮，让第一次调用执行到 await submitVideoTask
+  await new Promise(function(r) { setTimeout(r, 0); });
+
+  // 第一次调用应该已抢占锁
+  assert.strictEqual(videoGenState.isGenerating, true, '第一次调用后 isGenerating 应为 true');
+  assert.strictEqual(elements.btnGenVideo.disabled, true, '第一次调用后按钮应 disabled');
+  assert.strictEqual(elements.btnGenVideo.textContent, '提交中...', '第一次调用后按钮文字应为"提交中..."');
+
+  // 第一次 submitVideoTask 应已调用一次
+  assert.strictEqual(submitVideoCallCount, 1, '第一次调用后 submitVideoTask 应被调用1次');
+
+  // 第二次调用（第一次尚未结束）
+  var secondCall = handleVideoGenerate();
+
+  // 让微任务队列跑一轮
+  await new Promise(function(r) { setTimeout(r, 0); });
+
+  // 第二次调用应直接返回（锁被占用），不释放第一次的锁
+  assert.strictEqual(videoGenState.isGenerating, true, '第二次调用后 isGenerating 仍应为 true');
+  assert.strictEqual(elements.btnGenVideo.disabled, true, '第二次调用后按钮仍应 disabled');
+  // submitVideoTask 仍只被调用一次（第二次未进入提交逻辑）
+  assert.strictEqual(submitVideoCallCount, 1, '第二次调用不应额外调用 submitVideoTask');
+
+  // 等第二次调用完成（它是同步返回的，但 await 一下确保安全）
+  await secondCall;
+
+  // 释放第一次的 Promise
+  resolveSubmit(submitVideoResult);
+
+  // 等第一次调用完成
+  await firstCall;
+
+  // 第一次完成后锁应释放
+  assert.strictEqual(videoGenState.isGenerating, false, '第一次完成后 isGenerating 应为 false');
+  assert.strictEqual(elements.btnGenVideo.disabled, false, '第一次完成后按钮应恢复可点击');
+  assert.strictEqual(elements.btnGenVideo.textContent, '生成视频', '第一次完成后按钮文字应恢复');
 });
 
 // --- 12. 语法检查 ---
@@ -363,6 +400,7 @@ test('api.js 语法检查', function() {
   new Function(apiCode);
 });
 
+// --- 13. 版本号检查 ---
 test('APP_VERSION = 1.6.7', function() {
   assert.ok(appCode.indexOf("const APP_VERSION = '1.6.7'") >= 0, 'APP_VERSION should be 1.6.7');
 });
@@ -372,15 +410,46 @@ test('index.html 版本号 v1.6.7', function() {
   assert.ok(html.indexOf('v1.6.7') >= 0, 'index.html should contain v1.6.7');
 });
 
+// --- 14. seedRaw 安全定义检查 ---
 test('app.js handleVideoGenerate 不直接引用未定义的 seedRaw', function() {
   var fnMatch = appCode.match(/async function handleVideoGenerate\(\)\s*\{[\s\S]*?\n\}/);
   assert.ok(fnMatch, 'handleVideoGenerate must exist');
   var fnBody = fnMatch[0];
-  // seedRaw 应在定义后使用
   var defIdx = fnBody.indexOf('const seedRaw');
   var oldPattern = "seedRaw === '' ? -1 : parseInt(seedRaw)";
   assert.ok(defIdx >= 0, 'seedRaw 应有定义');
   assert.ok(fnBody.indexOf(oldPattern) === -1, '不应残留旧的无定义 seedRaw 用法');
+});
+
+// --- 15. 锁在 try 之前抢占检查 ---
+test('锁抢占在 try/finally 之前', function() {
+  var fnMatch = appCode.match(/async function handleVideoGenerate\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fnMatch, 'handleVideoGenerate must exist');
+  var fnBody = fnMatch[0];
+  var lockCheckIdx = fnBody.indexOf('if (videoGenState.isGenerating) return;');
+  var lockSetIdx = fnBody.indexOf('videoGenState.isGenerating = true;');
+  var tryIdx = fnBody.indexOf('try {');
+  assert.ok(lockCheckIdx >= 0, '应有 isGenerating 检查');
+  assert.ok(lockSetIdx >= 0, '应有 isGenerating = true');
+  assert.ok(tryIdx >= 0, '应有 try {');
+  // 锁检查和设置必须在 try 之前
+  assert.ok(lockCheckIdx < tryIdx, '锁检查必须在 try 之前');
+  assert.ok(lockSetIdx < tryIdx, '锁设置必须在 try 之前');
+  // 不应在 try 内部重复设置 isGenerating = true
+  var afterTry = fnBody.substring(tryIdx);
+  assert.ok(afterTry.indexOf('videoGenState.isGenerating = true;') === -1, 'try 内不应重复设置 isGenerating = true');
+});
+
+// --- 16. 非法 API Key 时锁恢复 ---
+test('非法 API Key: 锁恢复且不调用 API', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+  Store.getConfig = async function() { return { apiKey: '', apiDomain: '' }; };
+  await handleVideoGenerate();
+  assert.strictEqual(videoGenState.isGenerating, false, 'isGenerating 应恢复为 false');
+  assert.strictEqual(submitVideoCallCount, 0, '无 API Key 时不应调用 submitVideoTask');
+  assert.strictEqual(elements.btnGenVideo.disabled, false, '按钮应恢复可点击');
+  // 恢复 Store.getConfig
+  Store.getConfig = async function() { return mockConfig; };
 });
 
 // ============ 运行 ============
