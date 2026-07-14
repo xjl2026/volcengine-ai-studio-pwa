@@ -862,6 +862,7 @@ async function handleVideoGenerate() {
     restorePendingVideoTask();
     return;
   }
+  let submittedTaskInfo = null;
 
   videoGenState.isGenerating = true;
 
@@ -935,6 +936,7 @@ async function handleVideoGenerate() {
 
     // 历史记录参数（复用于 pending 记录和成功后更新）
     const historyParams = { model, resolution: params.resolution, ratio: params.ratio, duration: params.duration, seed: params.seed, audio: params.generateAudio, watermark: params.watermark };
+    submittedTaskInfo = { vidMode, prompt, params: historyParams };
 
     const submitResult = await submitVideoTask(params);
     if (!submitResult.success) { renderVideoTaskStatus('failed', '提交失败: ' + (submitResult.error || ''), 0); showToast('提交失败', 'error'); return; }
@@ -1025,7 +1027,7 @@ async function handleVideoGenerate() {
       if (submittedRecordId) {
         try { await Store.updateHistory(submittedRecordId, { status: 'timeout' }); } catch (_) {}
       }
-      renderVideoTimeout(submittedTaskId, submittedRecordId, { vidMode, prompt: document.getElementById('vidPrompt') ? document.getElementById('vidPrompt').value.trim() : '', params: {} });
+      renderVideoTimeout(submittedTaskId, submittedRecordId, submittedTaskInfo || undefined);
       if (!submittedRecordId) {
         showToast('任务已提交，但本地记录保存失败，请保留任务并稍后重新查询', 'warning');
       } else {
@@ -1185,93 +1187,108 @@ function clearPendingVideoTask() {
 }
 
 function getValidPendingVideoTask() {
-  const sources = [];
-  try { sources.push(localStorage.getItem('volc_pending_task')); } catch (_) {}
-  try { sources.push(sessionStorage.getItem('volc_pending_task')); } catch (_) {}
-  if (window._volatilePendingVideoTask) {
-    sources.push(JSON.stringify(window._volatilePendingVideoTask));
-  }
+  const candidates = [];
+  const now = Date.now();
+  const maxAge = 48 * 3600 * 1000;
 
-  for (var i = 0; i < sources.length; i++) {
-    var raw = sources[i];
-    if (!raw) continue;
-
+  function addCandidate(value, priority) {
+    if (!value) return;
     try {
-      var task = JSON.parse(raw);
-      if (!task.taskId || !task.savedAt) {
-        clearPendingVideoTask();
-        return null;
-      }
-
-      if (Date.now() - task.savedAt > 48 * 3600 * 1000) {
-        clearPendingVideoTask();
-        return null;
-      }
-
-      return task;
-    } catch (e) {
-      clearPendingVideoTask();
-      return null;
-    }
+      const task = typeof value === 'string' ? JSON.parse(value) : value;
+      const savedAt = Number(task && task.savedAt);
+      if (!task || !task.taskId || !Number.isFinite(savedAt)) return;
+      if (savedAt > now + 5 * 60 * 1000 || now - savedAt > maxAge) return;
+      candidates.push({ task: { ...task, savedAt }, priority });
+    } catch (_) {}
   }
 
-  return null;
+  try { addCandidate(localStorage.getItem('volc_pending_task'), 1); } catch (_) {}
+  try { addCandidate(sessionStorage.getItem('volc_pending_task'), 2); } catch (_) {}
+  addCandidate(window._volatilePendingVideoTask, 3);
+
+  if (candidates.length === 0) {
+    clearPendingVideoTask();
+    return null;
+  }
+
+  // 取最新副本；同一毫秒写入时优先 volatile，其次 sessionStorage，避免旧 localStorage 覆盖新 recordId。
+  candidates.sort(function(a, b) {
+    return (b.task.savedAt - a.task.savedAt) || (b.priority - a.priority);
+  });
+
+  const task = candidates[0].task;
+  const raw = JSON.stringify(task);
+  window._volatilePendingVideoTask = task;
+
+  // 用最新副本修复其余存储。失败不影响当前页继续恢复。
+  try { localStorage.setItem('volc_pending_task', raw); } catch (_) {}
+  try { sessionStorage.setItem('volc_pending_task', raw); } catch (_) {}
+
+  return task;
 }
 
 async function persistVideoTerminalState(options) {
-  var updates = {};
-  if (options.videoUrl) {
-    updates.result = [options.videoUrl];
-    updates.thumbnail = options.videoUrl;
+  if (!options || !options.taskId) {
+    throw new Error('缺少视频任务ID，无法保存终态');
   }
-  if (options.lastFrameUrl) {
-    updates.lastFrame = options.lastFrameUrl;
-  } else {
-    updates.lastFrame = null;
+
+  const succeeded = options.status === 'succeeded';
+  const updates = {
+    status: options.status,
+    result: succeeded && options.videoUrl ? [options.videoUrl] : [],
+    thumbnail: succeeded && options.videoUrl ? options.videoUrl : null,
+    lastFrame: succeeded && options.lastFrameUrl ? options.lastFrameUrl : null
+  };
+
+  let persistedRecord = null;
+
+  // 先按记录 ID 更新。
+  if (options.recordId) {
+    persistedRecord = await Store.updateHistory(options.recordId, updates);
   }
-  updates.status = options.status;
 
-  var recordId = options.recordId;
+  // recordId 可能因同步合并、旧数据或恢复信息过期而失效；按 taskId 找到真实本地记录再更新。
+  if (!persistedRecord) {
+    const currentHistory = await Store.getHistory();
+    const existing = Array.isArray(currentHistory)
+      ? currentHistory.find(function(item) { return item && item.taskId === options.taskId; })
+      : null;
 
-  if (recordId) {
-    var updateResult = await Store.updateHistory(recordId, updates);
-    if (!updateResult) {
-      recordId = null;
+    if (existing && existing.id) {
+      persistedRecord = await Store.updateHistory(existing.id, updates);
     }
   }
 
-  if (!recordId) {
-    var newRecord = await Store.addHistory({
+  // 本地确实不存在该 taskId 时才新增，避免 Store.addHistory 的 taskId 去重返回旧 pending 记录。
+  if (!persistedRecord) {
+    persistedRecord = await Store.addHistory({
       type: 'video',
       mode: getVidModeLabel(options.vidMode || 'i2v'),
       prompt: options.prompt || '',
       params: options.params || {},
       taskId: options.taskId,
       status: options.status,
-      result: options.videoUrl ? [options.videoUrl] : [],
-      lastFrame: options.lastFrameUrl || null,
-      thumbnail: options.videoUrl || null
+      result: updates.result,
+      lastFrame: updates.lastFrame,
+      thumbnail: updates.thumbnail
     });
-
-    if (!newRecord || !newRecord.id) {
-      throw new Error('视频历史记录保存失败');
-    }
-    recordId = newRecord.id;
   }
 
-  // 读后验证
-  var history = await Store.getHistory();
-  var persisted = null;
-  if (history && Array.isArray(history)) {
-    persisted = history.find(function(item) { return item.taskId === options.taskId; });
+  if (!persistedRecord || !persistedRecord.id) {
+    throw new Error('视频历史记录保存失败');
   }
 
-  if (!persisted || persisted.status !== options.status) {
+  // 读后验证真实存储，而不是相信 saveHistory/updateHistory 的返回值。
+  const history = await Store.getHistory();
+  const persisted = Array.isArray(history)
+    ? history.find(function(item) { return item && item.id === persistedRecord.id; })
+    : null;
+
+  if (!persisted || persisted.taskId !== options.taskId || persisted.status !== options.status) {
     throw new Error('视频历史记录未实际落盘');
   }
 
-  if (options.status === 'succeeded' &&
-    (!persisted.result || persisted.result[0] !== options.videoUrl)) {
+  if (succeeded && (!persisted.result || persisted.result[0] !== options.videoUrl)) {
     throw new Error('视频结果未实际落盘');
   }
 
