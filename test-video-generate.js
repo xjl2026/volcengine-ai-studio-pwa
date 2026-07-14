@@ -89,10 +89,17 @@ global.document = {
 global.window = {
   _currentPollingTaskId: null,
   _historyRendered: false,
-  _restoringTask: false
+  _restoringTask: false,
+  _volatilePendingVideoTask: null
 };
 global.navigator = { onLine: true };
 global.localStorage = {
+  _data: {},
+  getItem: function(k) { return this._data[k] || null; },
+  setItem: function(k, v) { this._data[k] = v; },
+  removeItem: function(k) { delete this._data[k]; }
+};
+global.sessionStorage = {
   _data: {},
   getItem: function(k) { return this._data[k] || null; },
   setItem: function(k, v) { this._data[k] = v; },
@@ -114,6 +121,8 @@ var lastRenderVideoTaskStatus = null;
 var copyToClipboard = async function() { return true; };
 
 var mockConfig = { apiKey: 'test-key', apiDomain: 'https://ark.cn-beijing.volces.com' };
+var mockHistoryList = [];
+
 
 // ============ Mock functions ============
 function showToast(msg, type) { toastMessages.push({ msg: msg, type: type }); }
@@ -175,7 +184,8 @@ eval(apiCode);
 Store = {
   getConfig: async function() { return mockConfig; },
   addHistory: async function(record) { return Object.assign({ id: 'rec-001' }, record); },
-  updateHistory: async function(id, updates) { savedHistoryUpdates.push({ id: id, updates: updates }); return true; }
+  updateHistory: async function(id, updates) { savedHistoryUpdates.push({ id: id, updates: updates }); return true; },
+  getHistory: async function() { return mockHistoryList; }
 };
 
 // 替换 submitVideoTask 和 pollVideoTask
@@ -199,24 +209,34 @@ assert.ok(handlerMatch, '必须找到 handleVideoGenerate 定义');
 eval(handlerMatch[0]);
 
 // 提取 renderVideoTimeout（真实函数，会创建 btnRetryQuery 并绑定 onclick）
-var timeoutMatch = appCode.match(/function renderVideoTimeout\(taskId, recordId\)\s*\{[\s\S]*?\n\}/);
+var timeoutMatch = appCode.match(/function renderVideoTimeout\(taskId, recordId, taskInfo\)\s*\{[\s\S]*?\n\}/);
 assert.ok(timeoutMatch, '必须找到 renderVideoTimeout 定义');
 eval(timeoutMatch[0]);
 
-// 提取 savePendingVideoTask（真实函数，写入 localStorage）
+// 提取 savePendingVideoTask（真实函数，写入 localStorage + sessionStorage + volatile）
 var saveMatch = appCode.match(/function savePendingVideoTask\(taskId, vidModeSnapshot, prompt, recordId, params\)\s*\{[\s\S]*?\n\}/);
 assert.ok(saveMatch, '必须找到 savePendingVideoTask 定义');
 eval(saveMatch[0]);
 
-// 提取 clearPendingVideoTask（真实函数，清除 localStorage）
+// 提取 buildPendingVideoTask
+var buildMatch = appCode.match(/function buildPendingVideoTask\(taskId, vidModeSnapshot, prompt, recordId, params\)\s*\{[\s\S]*?\n\}/);
+assert.ok(buildMatch, '必须找到 buildPendingVideoTask 定义');
+eval(buildMatch[0]);
+
+// 提取 clearPendingVideoTask（真实函数，清除三处存储）
 var clearMatch = appCode.match(/function clearPendingVideoTask\(\)\s*\{[\s\S]*?\n\}/);
 assert.ok(clearMatch, '必须找到 clearPendingVideoTask 定义');
 eval(clearMatch[0]);
 
-// 提取 getValidPendingVideoTask（真实函数，校验 pending task 有效性）
+// 提取 getValidPendingVideoTask（真实函数，三层读取校验）
 var getValidMatch = appCode.match(/function getValidPendingVideoTask\(\)\s*\{[\s\S]*?\n\}/);
 assert.ok(getValidMatch, '必须找到 getValidPendingVideoTask 定义');
 eval(getValidMatch[0]);
+
+// 提取 persistVideoTerminalState（统一终态落盘 + 读后验证）
+var persistMatch = appCode.match(/async function persistVideoTerminalState\(options\)\s*\{[\s\S]*?\n\}/);
+assert.ok(persistMatch, '必须找到 persistVideoTerminalState 定义');
+eval(persistMatch[0]);
 
 // 提取 restorePendingVideoTask（真实函数，执行恢复轮询）
 var restoreMatch = appCode.match(/async function restorePendingVideoTask\(\)\s*\{[\s\S]*?\n\}/);
@@ -255,8 +275,11 @@ function setupTestEnvironment(opts) {
   renderVideoResultCallCount = 0;
   renderVideoTaskStatusCallCount = 0;
   lastRenderVideoTaskStatus = null;
-  // 清空 localStorage
+  // 清空 localStorage, sessionStorage, volatile
   global.localStorage._data = {};
+  global.sessionStorage._data = {};
+  global.window._volatilePendingVideoTask = null;
+  mockHistoryList = [];
   // 每次都重新赋值 mock 函数
   submitVideoTask = async function(params) {
     submitVideoCallCount++;
@@ -286,6 +309,8 @@ test('图生视频: seedRaw 未定义不抛异常', async function() {
     vidFirstImage: ['data:image/png;base64,abc'],
     seedValue: ''
   });
+  // persistVideoTerminalState 读后验证需要 mockHistoryList 包含匹配记录
+  mockHistoryList = [{ taskId: 'test-task-001', status: 'succeeded', result: ['https://example.com/video.mp4'] }];
   await handleVideoGenerate();
   assert.ok(submitVideoCallCount === 1, 'submitVideoTask 应被调用1次，实际: ' + submitVideoCallCount);
   assert.strictEqual(lastSubmitParams.seed, -1, '空 seed 应为 -1');
@@ -403,6 +428,8 @@ test('主流程轮询异常: pending 保留 + timeout + 不显示提交异常', 
 test('成功但无 video_url: 标记为 failed 不留 pending', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
   pollVideoResult = { success: true, data: { content: {} } };
+  // persistVideoTerminalState 读后验证需要 mockHistoryList 包含匹配记录
+  mockHistoryList = [{ taskId: 'test-task-001', status: 'failed', result: [] }];
   await handleVideoGenerate();
   assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('未返回视频URL') >= 0; }), '应显示未返回视频URL提示');
   var failedUpdate = savedHistoryUpdates.find(function(u) { return u.updates.status === 'failed'; });
@@ -579,6 +606,9 @@ test('过期 pending task: 安全清除后正常提交', async function() {
     params: {}, savedAt: expiredTime
   }));
 
+  // persistVideoTerminalState 读后验证需要 mockHistoryList 包含匹配记录
+  mockHistoryList = [{ taskId: 'test-task-001', status: 'succeeded', result: ['https://example.com/video.mp4'] }];
+
   await handleVideoGenerate();
 
   // 新任务应正常提交
@@ -688,6 +718,9 @@ test('恢复成功有 recordId: pending 清除 + updateHistory 一次 + 不重�
     return pollVideoResult;
   };
 
+  // persistVideoTerminalState 读后验证需要 mockHistoryList 包含匹配记录
+  mockHistoryList = [{ taskId: 'restore-ok-001', status: 'succeeded', result: ['https://example.com/restored.mp4'] }];
+
   // 记录 Store.updateHistory / addHistory 调用
   var updateHistoryCount = 0;
   var addHistoryCount = 0;
@@ -731,6 +764,9 @@ test('恢复成功无 recordId: pending 清除 + addHistory 一次 + 不重复',
     if (onProgress) onProgress({ status: 'running', attempt: 1 });
     return pollVideoResult;
   };
+
+  // persistVideoTerminalState 读后验证需要 mockHistoryList 包含匹配记录
+  mockHistoryList = [{ taskId: 'restore-ok-002', status: 'succeeded', result: ['https://example.com/restored2.mp4'] }];
 
   var updateHistoryCount = 0;
   var addHistoryCount = 0;
@@ -862,6 +898,259 @@ test('getValidPendingVideoTask 函数存在', function() {
   assert.ok(typeof savePendingVideoTask === 'function', 'savePendingVideoTask 应为函数');
   assert.ok(typeof clearPendingVideoTask === 'function', 'clearPendingVideoTask 应为函数');
   assert.ok(typeof restorePendingVideoTask === 'function', 'restorePendingVideoTask 应为函数');
+  assert.ok(typeof persistVideoTerminalState === 'function', 'persistVideoTerminalState 应为函数');
+  assert.ok(typeof buildPendingVideoTask === 'function', 'buildPendingVideoTask 应为函数');
+});
+
+// --- 23. localStorage QuotaExceeded → sessionStorage 备用 ---
+test('localStorage 配额满: sessionStorage 备用 + 阻止重复提交', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // localStorage.setItem 抛 QuotaExceededError
+  var origSetItem = global.localStorage.setItem;
+  global.localStorage.setItem = function() { throw new Error('QuotaExceededError'); };
+
+  await handleVideoGenerate();
+
+  // submitVideoTask 只调用1次
+  assert.strictEqual(submitVideoCallCount, 1, 'submitVideoTask 应被调用1次');
+
+  // sessionStorage 应有 pending task
+  var sessRaw = global.sessionStorage.getItem('volc_pending_task');
+  assert.ok(sessRaw, 'sessionStorage 应有 pending task');
+  var sessObj = JSON.parse(sessRaw);
+  assert.strictEqual(sessObj.taskId, 'test-task-001', 'taskId 应正确');
+
+  // getValidPendingVideoTask 应能读取（从 sessionStorage）
+  var valid = getValidPendingVideoTask();
+  assert.ok(valid, 'getValidPendingVideoTask 应返回有效 task');
+  assert.strictEqual(valid.taskId, 'test-task-001', 'taskId 应正确');
+
+  // 恢复 localStorage.setItem
+  global.localStorage.setItem = origSetItem;
+});
+
+// --- 24. localStorage + sessionStorage 都失败 → volatile 兜底 ---
+test('双 Storage 失败: volatile 兜底 + 阻止新任务 + 显示请勿刷新', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 两个 Storage 都抛异常
+  var origLS = global.localStorage.setItem;
+  var origSS = global.sessionStorage.setItem;
+  global.localStorage.setItem = function() { throw new Error('QuotaExceededError'); };
+  global.sessionStorage.setItem = function() { throw new Error('QuotaExceededError'); };
+
+  await handleVideoGenerate();
+
+  // submitVideoTask 只调用1次
+  assert.strictEqual(submitVideoCallCount, 1, 'submitVideoTask 应被调用1次');
+
+  // volatile pending 应存在
+  assert.ok(global.window._volatilePendingVideoTask, 'volatile pending 应存在');
+  assert.strictEqual(global.window._volatilePendingVideoTask.taskId, 'test-task-001', 'taskId 应正确');
+
+  // getValidPendingVideoTask 应能从 volatile 读取
+  var valid = getValidPendingVideoTask();
+  assert.ok(valid, 'getValidPendingVideoTask 应从 volatile 返回 task');
+
+  // 应显示请勿刷新提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('请勿刷新页面') >= 0; }), '应显示请勿刷新提示');
+
+  // 再次点击不应提交新任务
+  submitVideoCallCount = 0;
+  toastMessages = [];
+  pollVideoTask = async function(taskId, onProgress) { pollVideoCallCount++; return pollVideoResult; };
+  await handleVideoGenerate();
+  assert.strictEqual(submitVideoCallCount, 0, 'volatile pending 存在时不应提交新任务');
+
+  // 恢复
+  global.localStorage.setItem = origLS;
+  global.sessionStorage.setItem = origSS;
+});
+
+// --- 25. updateHistory 返回 null → 回退 addHistory ---
+test('updateHistory 返回 null: 回退 addHistory + 读后验证通过', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效 pending task
+  savePendingVideoTask('persist-task-001', 'i2v', '测试提示词', 'rec-persist-001', { model: 'test-model' });
+
+  // pollVideoTask 返回成功 + video_url
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/persist.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    if (onProgress) onProgress({ status: 'running', attempt: 1 });
+    return pollVideoResult;
+  };
+
+  // Store.updateHistory 返回 null（记录不存在）
+  var origUpdateHistory = Store.updateHistory;
+  var updateHistoryCount = 0;
+  var addHistoryCount = 0;
+  Store.updateHistory = async function() { updateHistoryCount++; return null; };
+  Store.addHistory = async function(record) { addHistoryCount++; return Object.assign({ id: 'rec-new-persist' }, record); };
+
+  // mockHistoryList 包含成功记录用于读后验证
+  mockHistoryList = [{
+    taskId: 'persist-task-001',
+    status: 'succeeded',
+    result: ['https://example.com/persist.mp4']
+  }];
+
+  await restorePendingVideoTask();
+
+  // updateHistory 被调用过（返回 null）
+  assert.strictEqual(updateHistoryCount, 1, 'updateHistory 应被调用1次');
+  // addHistory 应被回退调用
+  assert.strictEqual(addHistoryCount, 1, 'addHistory 应被回退调用1次');
+
+  // addHistory 应包含原始 prompt 和 vidMode
+  // pending task 应清除（读后验证通过）
+  assert.strictEqual(global.localStorage.getItem('volc_pending_task'), null, 'pending task 应被清除');
+
+  Store.updateHistory = origUpdateHistory;
+});
+
+// --- 26. getHistory 找不到 taskId → 落盘失败 → pending 保留 ---
+test('读后验证失败: getHistory 找不到 taskId → pending 保留 + 重新查询入口', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效 pending task
+  savePendingVideoTask('verify-fail-001', 'i2v', '验证失败', 'rec-verify-001', { model: 'test' });
+
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/verify.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+
+  // mockHistoryList 不包含该 taskId
+  mockHistoryList = [{ taskId: 'other-task', status: 'succeeded', result: ['other.mp4'] }];
+
+  await restorePendingVideoTask();
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, '读后验证失败后 pending task 应保留');
+
+  // 应显示重新查询入口
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+
+  // 应显示查询中断提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('查询暂时中断') >= 0; }), '应显示查询中断提示');
+
+  // _currentPollingTaskId 应清理
+  assert.strictEqual(global.window._currentPollingTaskId, null, '_currentPollingTaskId 应为 null');
+});
+
+// --- 27. getHistory 记录仍为 pending → 不得清除 ---
+test('记录仍为 pending: 不得清除 pending task', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  savePendingVideoTask('still-pending-001', 'i2v', '仍为 pending', 'rec-pending-001', { model: 'test' });
+
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/still.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+
+  // mockHistoryList 中该记录仍为 pending
+  mockHistoryList = [{
+    taskId: 'still-pending-001',
+    status: 'pending',
+    result: []
+  }];
+
+  await restorePendingVideoTask();
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, '记录仍为 pending 时不得清除 pending task');
+
+  // 应显示重新查询入口
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+});
+
+// --- 28. 重新查询 recordId=null → 新增历史包含原始 metadata ---
+test('重新查询 recordId=null: 新增历史包含原 prompt/vidMode/params', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效 pending task，recordId=null
+  var origParams = { model: 'test-model', resolution: '1080p', ratio: '16:9', duration: '12', seed: -1, audio: true, watermark: false };
+  savePendingVideoTask('retry-null-001', 'i2v', '原始提示词内容', null, origParams);
+
+  // pollVideoTask 返回成功 + video_url
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/retry-null.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+
+  var addHistoryRecord = null;
+  var origAddHistory = Store.addHistory;
+  Store.addHistory = async function(record) {
+    addHistoryRecord = record;
+    return Object.assign({ id: 'rec-new-null' }, record);
+  };
+
+  // mockHistoryList 包含成功记录
+  mockHistoryList = [{
+    taskId: 'retry-null-001',
+    status: 'succeeded',
+    result: ['https://example.com/retry-null.mp4']
+  }];
+
+  await restorePendingVideoTask();
+
+  // addHistory 应被调用
+  assert.ok(addHistoryRecord, 'addHistory 应被调用');
+
+  // 应包含原始 prompt（不是空）
+  assert.strictEqual(addHistoryRecord.prompt, '原始提示词内容', '应包含原始 prompt');
+
+  // 应包含正确的 mode（不是"视频"，应是 getVidModeLabel 结果）
+  assert.strictEqual(addHistoryRecord.mode, 'i2v', 'mode 应为 i2v（getVidModeLabel 结果）');
+
+  // 应包含原始 params（不是空对象）
+  assert.ok(addHistoryRecord.params && addHistoryRecord.params.model === 'test-model', '应包含原始 params.model');
+
+  Store.addHistory = origAddHistory;
+});
+
+// --- 29. 明确失败状态保存失败 → pending 保留 ---
+test('失败状态保存失败: pending 保留 + 重新查询入口', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  savePendingVideoTask('fail-persist-001', 'i2v', '失败保存', 'rec-fail-persist-001', { model: 'test' });
+
+  // pollVideoTask 返回明确失败（非 timeout）
+  pollVideoResult = { success: false, error: '服务端生成失败' };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+
+  // persistVideoTerminalState 会调用 Store.updateHistory，让其抛异常
+  var origUpdateHistory = Store.updateHistory;
+  Store.updateHistory = async function() { throw new Error('IndexedDB 写入失败'); };
+
+  // mockHistoryList 为空（读后验证会失败）
+  mockHistoryList = [];
+
+  await restorePendingVideoTask();
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, '失败状态保存失败后 pending task 应保留');
+
+  // 应显示重新查询入口
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+
+  // _currentPollingTaskId 应清理
+  assert.strictEqual(global.window._currentPollingTaskId, null, '_currentPollingTaskId 应为 null');
+
+  Store.updateHistory = origUpdateHistory;
 });
 
 // ============ 运行 ============

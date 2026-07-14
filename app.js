@@ -946,7 +946,11 @@ async function handleVideoGenerate() {
     submittedTaskId = taskId;
 
     // 先保存不依赖本地历史记录的最小恢复信息
-    savePendingVideoTask(taskId, vidMode, prompt, null, historyParams);
+    const durablePendingSaved = savePendingVideoTask(taskId, vidMode, prompt, null, historyParams);
+
+    if (!durablePendingSaved) {
+      showToast('任务已提交，但浏览器持久化存储不可用，请勿刷新页面，并保留任务ID：' + taskId, 'warning');
+    }
 
     // 再写入本地历史
     const pendingRecord = await Store.addHistory({
@@ -985,26 +989,33 @@ async function handleVideoGenerate() {
         renderVideoResult(videoUrl, lastFrameUrl);
         showToast('生成成功！', 'success');
         notifyTaskComplete('video', prompt);
-        await Store.updateHistory(pendingRecord.id, {
-          result: [videoUrl], lastFrame: lastFrameUrl || null,
-          thumbnail: videoUrl, status: 'succeeded'
+        await persistVideoTerminalState({
+          taskId, recordId: submittedRecordId, vidMode, prompt, params: historyParams,
+          status: 'succeeded', videoUrl, lastFrameUrl
         });
         window._historyRendered = false;
       } else {
-        // 任务成功但没有 video_url：标记为失败而非留 pending
         renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
         showToast('任务完成但未返回视频URL', 'error');
-        await Store.updateHistory(pendingRecord.id, { status: 'failed' });
+        await persistVideoTerminalState({
+          taskId, recordId: submittedRecordId, vidMode, prompt, params: historyParams,
+          status: 'failed', videoUrl: null, lastFrameUrl: null
+        });
       }
       clearPendingVideoTask();
     } else if (pollResult.timeout && pollResult.taskId) {
-      renderVideoTimeout(pollResult.taskId, pendingRecord.id);
+      renderVideoTimeout(pollResult.taskId, submittedRecordId, { vidMode, prompt, params: historyParams });
       showToast('轮询超时，可重试查询', 'warning');
-      await Store.updateHistory(pendingRecord.id, { status: 'timeout' });
+      if (submittedRecordId) {
+        try { await Store.updateHistory(submittedRecordId, { status: 'timeout' }); } catch (_) {}
+      }
     } else {
       renderVideoTaskStatus('failed', pollResult.error || '失败', 0);
       showToast('生成失败', 'error');
-      await Store.updateHistory(pendingRecord.id, { status: 'failed' });
+      await persistVideoTerminalState({
+        taskId, recordId: submittedRecordId, vidMode, prompt, params: historyParams,
+        status: 'failed', videoUrl: null, lastFrameUrl: null
+      });
       clearPendingVideoTask();
     }
   } catch (e) {
@@ -1014,7 +1025,7 @@ async function handleVideoGenerate() {
       if (submittedRecordId) {
         try { await Store.updateHistory(submittedRecordId, { status: 'timeout' }); } catch (_) {}
       }
-      renderVideoTimeout(submittedTaskId, submittedRecordId);
+      renderVideoTimeout(submittedTaskId, submittedRecordId, { vidMode, prompt: document.getElementById('vidPrompt') ? document.getElementById('vidPrompt').value.trim() : '', params: {} });
       if (!submittedRecordId) {
         showToast('任务已提交，但本地记录保存失败，请保留任务并稍后重新查询', 'warning');
       } else {
@@ -1059,7 +1070,16 @@ function renderVideoResult(url, lastFrameUrl) {
   panel.querySelector('.copy-btn').onclick = async () => { const ok = await copyToClipboard(url); showToast(ok ? '已复制' : '复制失败', ok ? 'success' : 'error'); };
 }
 
-function renderVideoTimeout(taskId, recordId) {
+function renderVideoTimeout(taskId, recordId, taskInfo) {
+  // 通过 getValidPendingVideoTask 获取完整信息（如果调用方未传 taskInfo）
+  if (!taskInfo) {
+    var pending = getValidPendingVideoTask();
+    if (pending && pending.taskId === taskId) {
+      taskInfo = pending;
+    } else {
+      taskInfo = { vidMode: 'i2v', prompt: '', params: {} };
+    }
+  }
   const panel = document.getElementById('vidResultPanel');
   panel.innerHTML = '<div class="task-status"><div class="status-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ffb443" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="6" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div><div class="status-text" style="color:#ffb443">轮询超时</div><div class="status-detail">任务ID: ' + taskId + '<br>任务可能仍在生成中</div><button class="btn-primary" id="btnRetryQuery" style="margin-top:12px;">重新查询</button></div>';
   document.getElementById('btnRetryQuery').onclick = async () => {
@@ -1080,31 +1100,40 @@ function renderVideoTimeout(taskId, recordId) {
         if (url) {
           renderVideoResult(url, lf);
           showToast('生成成功！', 'success');
-          if (recordId) {
-            await Store.updateHistory(recordId, { result: [url], lastFrame: lf || null, thumbnail: url, status: 'succeeded' });
-          } else {
-            await Store.addHistory({ type: 'video', mode: '视频', params: {}, result: [url], thumbnail: url, taskId, status: 'succeeded' });
-          }
+          await persistVideoTerminalState({
+            taskId, recordId, vidMode: taskInfo.vidMode || 'i2v',
+            prompt: taskInfo.prompt || '', params: taskInfo.params || {},
+            status: 'succeeded', videoUrl: url, lastFrameUrl: lf
+          });
           window._historyRendered = false;
         } else {
           renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
           showToast('任务完成但未返回视频URL', 'error');
-          if (recordId) await Store.updateHistory(recordId, { status: 'failed' });
+          await persistVideoTerminalState({
+            taskId, recordId, vidMode: taskInfo.vidMode || 'i2v',
+            prompt: taskInfo.prompt || '', params: taskInfo.params || {},
+            status: 'failed', videoUrl: null, lastFrameUrl: null
+          });
         }
         clearPendingVideoTask();
-      } else if (result.timeout && result.taskId) { renderVideoTimeout(result.taskId, recordId); showToast('仍未完成', 'warning'); }
+      } else if (result.timeout && result.taskId) { renderVideoTimeout(result.taskId, recordId, taskInfo); showToast('仍未完成', 'warning'); }
       else {
         renderVideoTaskStatus('failed', result.error || '失败', 0);
+        showToast('生成失败', 'error');
+        await persistVideoTerminalState({
+          taskId, recordId, vidMode: taskInfo.vidMode || 'i2v',
+          prompt: taskInfo.prompt || '', params: taskInfo.params || {},
+          status: 'failed', videoUrl: null, lastFrameUrl: null
+        });
         clearPendingVideoTask();
-        if (recordId) await Store.updateHistory(recordId, { status: 'failed' });
       }
     } catch (e) {
       console.error('重新查询异常:', e);
-      // 网络异常时不清除 pending task，保持可恢复
+      // 网络异常或落盘失败时不清除 pending task，保持可恢复
       if (recordId) {
         try { await Store.updateHistory(recordId, { status: 'timeout' }); } catch (_) {}
       }
-      renderVideoTimeout(taskId, recordId);
+      renderVideoTimeout(taskId, recordId, taskInfo);
       showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
     } finally {
       window._currentPollingTaskId = null;
@@ -1113,37 +1142,140 @@ function renderVideoTimeout(taskId, recordId) {
 }
 
 // ============ 待处理任务恢复 ============
+function buildPendingVideoTask(taskId, vidModeSnapshot, prompt, recordId, params) {
+  return {
+    taskId,
+    vidMode: vidModeSnapshot,
+    prompt: prompt || '',
+    recordId: recordId || null,
+    params: params || {},
+    savedAt: Date.now()
+  };
+}
+
 function savePendingVideoTask(taskId, vidModeSnapshot, prompt, recordId, params) {
-  localStorage.setItem('volc_pending_task', JSON.stringify({
-    taskId, vidMode: vidModeSnapshot, prompt, recordId, params, savedAt: Date.now()
-  }));
+  const task = buildPendingVideoTask(taskId, vidModeSnapshot, prompt, recordId, params);
+
+  window._volatilePendingVideoTask = task;
+
+  let durableSaved = false;
+  const raw = JSON.stringify(task);
+
+  try {
+    localStorage.setItem('volc_pending_task', raw);
+    durableSaved = true;
+  } catch (e) {
+    console.warn('localStorage 保存待恢复任务失败:', e);
+  }
+
+  try {
+    sessionStorage.setItem('volc_pending_task', raw);
+    durableSaved = true;
+  } catch (e) {
+    console.warn('sessionStorage 保存待恢复任务失败:', e);
+  }
+
+  return durableSaved;
 }
 
 function clearPendingVideoTask() {
-  localStorage.removeItem('volc_pending_task');
+  try { localStorage.removeItem('volc_pending_task'); } catch (_) {}
+  try { sessionStorage.removeItem('volc_pending_task'); } catch (_) {}
+  window._volatilePendingVideoTask = null;
 }
 
 function getValidPendingVideoTask() {
-  const raw = localStorage.getItem('volc_pending_task');
-  if (!raw) return null;
-
-  try {
-    const task = JSON.parse(raw);
-    if (!task.taskId || !task.savedAt) {
-      clearPendingVideoTask();
-      return null;
-    }
-
-    if (Date.now() - task.savedAt > 48 * 3600 * 1000) {
-      clearPendingVideoTask();
-      return null;
-    }
-
-    return task;
-  } catch (e) {
-    clearPendingVideoTask();
-    return null;
+  const sources = [];
+  try { sources.push(localStorage.getItem('volc_pending_task')); } catch (_) {}
+  try { sources.push(sessionStorage.getItem('volc_pending_task')); } catch (_) {}
+  if (window._volatilePendingVideoTask) {
+    sources.push(JSON.stringify(window._volatilePendingVideoTask));
   }
+
+  for (var i = 0; i < sources.length; i++) {
+    var raw = sources[i];
+    if (!raw) continue;
+
+    try {
+      var task = JSON.parse(raw);
+      if (!task.taskId || !task.savedAt) {
+        clearPendingVideoTask();
+        return null;
+      }
+
+      if (Date.now() - task.savedAt > 48 * 3600 * 1000) {
+        clearPendingVideoTask();
+        return null;
+      }
+
+      return task;
+    } catch (e) {
+      clearPendingVideoTask();
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function persistVideoTerminalState(options) {
+  var updates = {};
+  if (options.videoUrl) {
+    updates.result = [options.videoUrl];
+    updates.thumbnail = options.videoUrl;
+  }
+  if (options.lastFrameUrl) {
+    updates.lastFrame = options.lastFrameUrl;
+  } else {
+    updates.lastFrame = null;
+  }
+  updates.status = options.status;
+
+  var recordId = options.recordId;
+
+  if (recordId) {
+    var updateResult = await Store.updateHistory(recordId, updates);
+    if (!updateResult) {
+      recordId = null;
+    }
+  }
+
+  if (!recordId) {
+    var newRecord = await Store.addHistory({
+      type: 'video',
+      mode: getVidModeLabel(options.vidMode || 'i2v'),
+      prompt: options.prompt || '',
+      params: options.params || {},
+      taskId: options.taskId,
+      status: options.status,
+      result: options.videoUrl ? [options.videoUrl] : [],
+      lastFrame: options.lastFrameUrl || null,
+      thumbnail: options.videoUrl || null
+    });
+
+    if (!newRecord || !newRecord.id) {
+      throw new Error('视频历史记录保存失败');
+    }
+    recordId = newRecord.id;
+  }
+
+  // 读后验证
+  var history = await Store.getHistory();
+  var persisted = null;
+  if (history && Array.isArray(history)) {
+    persisted = history.find(function(item) { return item.taskId === options.taskId; });
+  }
+
+  if (!persisted || persisted.status !== options.status) {
+    throw new Error('视频历史记录未实际落盘');
+  }
+
+  if (options.status === 'succeeded' &&
+    (!persisted.result || persisted.result[0] !== options.videoUrl)) {
+    throw new Error('视频结果未实际落盘');
+  }
+
+  return persisted;
 }
 
 async function restorePendingVideoTask() {
@@ -1183,34 +1315,38 @@ async function restorePendingVideoTask() {
         renderVideoResult(url, lf);
         showToast('视频生成成功！', 'success');
         notifyTaskComplete('video', taskInfo.prompt || '');
-        if (taskInfo.recordId) {
-          await Store.updateHistory(taskInfo.recordId, {
-            result: [url], lastFrame: lf || null, thumbnail: url, status: 'succeeded'
-          });
-        } else {
-          await Store.addHistory({
-            type: 'video', mode: getVidModeLabel(taskInfo.vidMode || 'i2v'),
-            prompt: taskInfo.prompt || '', params: taskInfo.params || {},
-            result: [url], lastFrame: lf || null, thumbnail: url,
-            taskId: taskInfo.taskId, status: 'succeeded'
-          });
-        }
+        await persistVideoTerminalState({
+          taskId: taskInfo.taskId, recordId: taskInfo.recordId,
+          vidMode: taskInfo.vidMode || 'i2v', prompt: taskInfo.prompt || '',
+          params: taskInfo.params || {},
+          status: 'succeeded', videoUrl: url, lastFrameUrl: lf
+        });
         window._historyRendered = false;
       } else {
         renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
         showToast('任务完成但未返回视频URL', 'error');
-        if (taskInfo.recordId) await Store.updateHistory(taskInfo.recordId, { status: 'failed' });
+        await persistVideoTerminalState({
+          taskId: taskInfo.taskId, recordId: taskInfo.recordId,
+          vidMode: taskInfo.vidMode || 'i2v', prompt: taskInfo.prompt || '',
+          params: taskInfo.params || {},
+          status: 'failed', videoUrl: null, lastFrameUrl: null
+        });
       }
       // 只有本地成功落盘或终态处理成功后，才清除恢复任务
       clearPendingVideoTask();
     } else if (result.timeout && result.taskId) {
-      renderVideoTimeout(result.taskId, taskInfo.recordId);
+      renderVideoTimeout(result.taskId, taskInfo.recordId, taskInfo);
       showToast('任务仍在生成中，可稍后重试', 'warning');
       // 保留 pending task，下次切回来还能恢复
     } else {
       renderVideoTaskStatus('failed', result.error || '失败', 0);
-      // 更新历史记录状态为失败
-      if (taskInfo.recordId) await Store.updateHistory(taskInfo.recordId, { status: 'failed' });
+      showToast('生成失败', 'error');
+      await persistVideoTerminalState({
+        taskId: taskInfo.taskId, recordId: taskInfo.recordId,
+        vidMode: taskInfo.vidMode || 'i2v', prompt: taskInfo.prompt || '',
+        params: taskInfo.params || {},
+        status: 'failed', videoUrl: null, lastFrameUrl: null
+      });
       clearPendingVideoTask();
     }
   } catch (e) {
@@ -1219,7 +1355,7 @@ async function restorePendingVideoTask() {
     if (taskInfo.recordId) {
       try { await Store.updateHistory(taskInfo.recordId, { status: 'timeout' }); } catch (_) {}
     }
-    renderVideoTimeout(taskInfo.taskId, taskInfo.recordId);
+    renderVideoTimeout(taskInfo.taskId, taskInfo.recordId, taskInfo);
     showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
   } finally {
     window._restoringTask = false;
