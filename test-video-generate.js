@@ -673,6 +673,131 @@ test('重新查询网络异常: pending 保留 + timeout + 重试按钮重新出
   assert.ok(newRetryBtn, 'btnRetryQuery 应重新出现');
 });
 
+// --- 16b. 恢复成功且有 recordId → pending 清除 + 不重复恢复 ---
+test('恢复成功有 recordId: pending 清除 + updateHistory 一次 + 不重复', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效 pending task（有 recordId）
+  savePendingVideoTask('restore-ok-001', 'i2v', '成功恢复', 'rec-ok-001', { model: 'test' });
+
+  // pollVideoTask 返回成功 + video_url
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/restored.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    if (onProgress) onProgress({ status: 'running', attempt: 1 });
+    return pollVideoResult;
+  };
+
+  // 记录 Store.updateHistory / addHistory 调用
+  var updateHistoryCount = 0;
+  var addHistoryCount = 0;
+  var origUpdateHistory = Store.updateHistory;
+  var origAddHistory = Store.addHistory;
+  Store.updateHistory = async function(id, updates) { updateHistoryCount++; savedHistoryUpdates.push({ id: id, updates: updates }); return true; };
+  Store.addHistory = async function(record) { addHistoryCount++; return Object.assign({ id: 'rec-new' }, record); };
+
+  await restorePendingVideoTask();
+
+  // updateHistory 只调用一次，状态为 succeeded
+  assert.strictEqual(updateHistoryCount, 1, 'Store.updateHistory 应只调用1次，实际: ' + updateHistoryCount);
+  assert.strictEqual(savedHistoryUpdates[savedHistoryUpdates.length - 1].updates.status, 'succeeded', '状态应为 succeeded');
+
+  // addHistory 不调用
+  assert.strictEqual(addHistoryCount, 0, 'Store.addHistory 不应调用');
+
+  // pending task 应清除
+  assert.strictEqual(global.localStorage.getItem('volc_pending_task'), null, 'pending task 应被清除');
+
+  // 再次调用 restorePendingVideoTask：不得再次轮询或更新历史
+  pollVideoCallCount = 0;
+  await restorePendingVideoTask();
+  assert.strictEqual(pollVideoCallCount, 0, '清除后再次恢复不应轮询');
+
+  // 恢复
+  Store.updateHistory = origUpdateHistory;
+  Store.addHistory = origAddHistory;
+});
+
+// --- 16c. 恢复成功但 recordId 为空 → pending 清除 + addHistory 一次 ---
+test('恢复成功无 recordId: pending 清除 + addHistory 一次 + 不重复', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效 pending task（recordId 为空）
+  savePendingVideoTask('restore-ok-002', 'i2v', '成功恢复无 record', null, { model: 'test' });
+
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/restored2.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    if (onProgress) onProgress({ status: 'running', attempt: 1 });
+    return pollVideoResult;
+  };
+
+  var updateHistoryCount = 0;
+  var addHistoryCount = 0;
+  var origUpdateHistory = Store.updateHistory;
+  var origAddHistory = Store.addHistory;
+  Store.updateHistory = async function(id, updates) { updateHistoryCount++; return true; };
+  Store.addHistory = async function(record) { addHistoryCount++; return Object.assign({ id: 'rec-new-002' }, record); };
+
+  await restorePendingVideoTask();
+
+  // addHistory 只调用一次
+  assert.strictEqual(addHistoryCount, 1, 'Store.addHistory 应只调用1次，实际: ' + addHistoryCount);
+  // updateHistory 不调用
+  assert.strictEqual(updateHistoryCount, 0, 'Store.updateHistory 不应调用');
+
+  // pending task 应清除
+  assert.strictEqual(global.localStorage.getItem('volc_pending_task'), null, 'pending task 应被清除');
+
+  // 再次调用：不得再次轮询或新增
+  pollVideoCallCount = 0;
+  addHistoryCount = 0;
+  await restorePendingVideoTask();
+  assert.strictEqual(pollVideoCallCount, 0, '清除后再次恢复不应轮询');
+  assert.strictEqual(addHistoryCount, 0, '清除后不应新增历史');
+
+  Store.updateHistory = origUpdateHistory;
+  Store.addHistory = origAddHistory;
+});
+
+// --- 16d. 恢复成功但本地落盘失败 → pending 保留 + 重新查询入口 ---
+test('恢复成功但落盘失败: pending 保留 + 重新查询入口', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效 pending task（有 recordId）
+  savePendingVideoTask('restore-fail-001', 'i2v', '落盘失败', 'rec-fail-001', { model: 'test' });
+
+  pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/fail.mp4' } } };
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    if (onProgress) onProgress({ status: 'running', attempt: 1 });
+    return pollVideoResult;
+  };
+
+  // Store.updateHistory 抛异常
+  var origUpdateHistory = Store.updateHistory;
+  Store.updateHistory = async function() { throw new Error('IndexedDB 写入失败'); };
+
+  await restorePendingVideoTask();
+
+  // pending task 应保留（未被清除）
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, '落盘失败后 pending task 应保留');
+  var pendingObj = JSON.parse(pendingRaw);
+  assert.strictEqual(pendingObj.taskId, 'restore-fail-001', 'taskId 不应变');
+
+  // 应显示重新查询入口（renderVideoTimeout 被调用）
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+
+  // 应显示查询中断提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('查询暂时中断') >= 0; }), '应显示查询中断提示');
+
+  // _currentPollingTaskId 应清理
+  assert.strictEqual(global.window._currentPollingTaskId, null, '_currentPollingTaskId 应为 null');
+
+  Store.updateHistory = origUpdateHistory;
+});
+
 // --- 17. 语法检查 ---
 test('app.js 语法检查', function() {
   new Function(appCode);

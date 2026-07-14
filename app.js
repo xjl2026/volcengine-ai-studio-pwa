@@ -1183,13 +1183,11 @@ async function restorePendingVideoTask() {
         renderVideoResult(url, lf);
         showToast('视频生成成功！', 'success');
         notifyTaskComplete('video', taskInfo.prompt || '');
-        // 改动 8: 用存下来的 recordId 更新，而不是新增
         if (taskInfo.recordId) {
           await Store.updateHistory(taskInfo.recordId, {
             result: [url], lastFrame: lf || null, thumbnail: url, status: 'succeeded'
           });
         } else {
-          // 兜底：没有 recordId 时才新增
           await Store.addHistory({
             type: 'video', mode: getVidModeLabel(taskInfo.vidMode || 'i2v'),
             prompt: taskInfo.prompt || '', params: taskInfo.params || {},
@@ -1199,12 +1197,12 @@ async function restorePendingVideoTask() {
         }
         window._historyRendered = false;
       } else {
-        // 任务成功但没有 video_url：标记为失败而非留 pending
         renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
         showToast('任务完成但未返回视频URL', 'error');
         if (taskInfo.recordId) await Store.updateHistory(taskInfo.recordId, { status: 'failed' });
-        clearPendingVideoTask();
       }
+      // 只有本地成功落盘或终态处理成功后，才清除恢复任务
+      clearPendingVideoTask();
     } else if (result.timeout && result.taskId) {
       renderVideoTimeout(result.taskId, taskInfo.recordId);
       showToast('任务仍在生成中，可稍后重试', 'warning');
