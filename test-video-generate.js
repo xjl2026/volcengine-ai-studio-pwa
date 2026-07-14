@@ -410,6 +410,85 @@ test('成功但无 video_url: 标记为 failed 不留 pending', async function()
   assert.strictEqual(global.localStorage.getItem('volc_pending_task'), null, 'pending task 应被清除');
 });
 
+// --- 9b. Store.addHistory 抛异常 → pending 保留 + recordId 可为空 ---
+test('addHistory 异常: pending 保留 + 不重复提交 + 触发恢复', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+  // Store.addHistory 抛异常
+  var origAddHistory = Store.addHistory;
+  Store.addHistory = async function() { throw new Error('IndexedDB 写入失败'); };
+
+  await handleVideoGenerate();
+
+  // submitVideoTask 只调用1次
+  assert.strictEqual(submitVideoCallCount, 1, 'submitVideoTask 应被调用1次');
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, 'pending task 应保留');
+  var pendingObj = JSON.parse(pendingRaw);
+  assert.strictEqual(pendingObj.taskId, 'test-task-001', 'taskId 应与服务端返回值一致');
+  // recordId 可以为空
+  assert.ok(!pendingObj.recordId, 'recordId 应为空（本地记录保存失败）');
+
+  // 应显示"本地记录保存失败"提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('本地记录保存失败') >= 0; }), '应显示本地记录保存失败提示');
+
+  // 应显示重新查询入口
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+
+  // 不应显示"视频提交异常"
+  assert.ok(!toastMessages.some(function(t) { return t.msg.indexOf('视频提交异常') >= 0; }), '不应显示"视频提交异常"');
+
+  // 恢复 Store.addHistory
+  Store.addHistory = origAddHistory;
+
+  // 再次点击生成：不应再次调用 submitVideoTask
+  submitVideoCallCount = 0;
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+  toastMessages = [];
+
+  await handleVideoGenerate();
+
+  // submitVideoTask 不应再次调用
+  assert.strictEqual(submitVideoCallCount, 0, '存在 pending task 时不应再次提交');
+
+  // 应触发旧任务恢复（pollVideoTask 应被调用）
+  assert.ok(pollVideoCallCount >= 1, '应触发旧任务恢复轮询');
+});
+
+// --- 9c. Store.addHistory 返回 null → 同样进入可恢复状态 ---
+test('addHistory 返回 null: pending 保留 + 不显示提交异常', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+  var origAddHistory = Store.addHistory;
+  Store.addHistory = async function() { return null; };
+
+  await handleVideoGenerate();
+
+  // submitVideoTask 只调用1次
+  assert.strictEqual(submitVideoCallCount, 1, 'submitVideoTask 应被调用1次');
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, 'pending task 应保留');
+  var pendingObj = JSON.parse(pendingRaw);
+  assert.strictEqual(pendingObj.taskId, 'test-task-001', 'taskId 应一致');
+  assert.ok(!pendingObj.recordId, 'recordId 应为空');
+
+  // 应显示本地记录保存失败提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('本地记录保存失败') >= 0; }), '应显示本地记录保存失败提示');
+
+  // 不应显示视频提交异常
+  assert.ok(!toastMessages.some(function(t) { return t.msg.indexOf('视频提交异常') >= 0; }), '不应显示视频提交异常');
+
+  // 应显示重新查询入口
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+
+  Store.addHistory = origAddHistory;
+});
+
 // --- 10. 素材校验失败时不得调用 API ---
 test('素材校验失败: 不调用 API', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: [] });

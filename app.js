@@ -942,19 +942,28 @@ async function handleVideoGenerate() {
     const taskId = submitResult.data?.id;
     if (!taskId) { renderVideoTaskStatus('failed', '未获取到任务ID', 0); return; }
 
-    // 改动 6: 提交成功后立即写 pending 历史记录
+    // 服务端已经接受任务，必须立即进入可恢复状态
+    submittedTaskId = taskId;
+
+    // 先保存不依赖本地历史记录的最小恢复信息
+    savePendingVideoTask(taskId, vidMode, prompt, null, historyParams);
+
+    // 再写入本地历史
     const pendingRecord = await Store.addHistory({
       type: 'video', mode: getVidModeLabel(vidMode), prompt, params: historyParams,
       result: [], taskId, status: 'pending'
     });
-    window._historyRendered = false;
 
-    // 记录已提交的 taskId 和 recordId，供 catch 分支判断
-    submittedTaskId = taskId;
+    if (!pendingRecord || !pendingRecord.id) {
+      throw new Error('本地历史记录保存失败');
+    }
+
     submittedRecordId = pendingRecord.id;
 
-    // 改动 7: 保存更多参数到 localStorage
-    savePendingVideoTask(taskId, vidMode, prompt, pendingRecord.id, historyParams);
+    // 历史记录写入成功后，用 recordId 更新恢复信息
+    savePendingVideoTask(taskId, vidMode, prompt, submittedRecordId, historyParams);
+
+    window._historyRendered = false;
 
     showToast('任务已提交，生成中...', 'success');
     if (btn) btn.textContent = '生成中...';
@@ -1006,7 +1015,11 @@ async function handleVideoGenerate() {
         try { await Store.updateHistory(submittedRecordId, { status: 'timeout' }); } catch (_) {}
       }
       renderVideoTimeout(submittedTaskId, submittedRecordId);
-      showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
+      if (!submittedRecordId) {
+        showToast('任务已提交，但本地记录保存失败，请保留任务并稍后重新查询', 'warning');
+      } else {
+        showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
+      }
     } else {
       // 尚未取得 taskId：真正的提交异常
       renderVideoTaskStatus('failed', e.message, 0);
