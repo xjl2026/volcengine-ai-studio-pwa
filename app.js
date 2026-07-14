@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.6';
+const APP_VERSION = '1.6.7';
 const APP_BUILD = '2026-07-13 15:20:00';
 
 let imgMode = 't2i';
@@ -850,65 +850,72 @@ function validateVideoMedia(mode, mediaState, caps) {
 }
 
 async function handleVideoGenerate() {
-  const config = await Store.getConfig();
-  if (!config.apiKey) { showToast('请先配置 API Key', 'warning'); switchPage('settings'); return; }
-  const prompt = document.getElementById('vidPrompt').value.trim();
-  if (!prompt) { showToast('请输入提示词', 'warning'); return; }
-
-  const model = document.getElementById('vidModel').value;
-  const mi = VIDEO_MODELS.find(m => m.id === model);
-  if (!mi) return;
-  const caps = mi.caps;
-
-  // 统一素材校验
-  if (vidMode === 'i2v') {
-    const mediaState = {
-      firstFrameImages: vidFirstImage,
-      tailFrameImages: vidTailImage,
-      refImages: vidRefImages,
-      refVideoUrls: vidRefVideoUrls,
-      refAudios: vidRefAudios
-    };
-    const validation = validateVideoMedia(vidMode, mediaState, caps);
-    if (!validation.valid) {
-      showToast(validation.msg, 'warning');
-      return;
-    }
-  }
-
-  const params = {
-    mode: vidMode, model, prompt,
-    firstFrameImages: vidMode === 'i2v' && vidFirstImage.length > 0 ? vidFirstImage : undefined,
-    tailFrameImages: vidMode === 'i2v' && vidTailImage.length > 0 ? vidTailImage : undefined,
-    refImages: vidMode === 'i2v' && vidRefImages.length > 0 ? vidRefImages : undefined,
-    refVideos: vidMode === 'i2v' && vidRefVideoUrls.length > 0 ? vidRefVideoUrls : undefined,
-    refAudios: vidMode === 'i2v' && vidRefAudios.length > 0 ? vidRefAudios : undefined,
-    resolution: document.getElementById('vidResolution').value,
-    ratio: document.getElementById('vidRatio').value,
-    duration: document.getElementById('vidDuration').value,
-    seed: seedRaw === '' ? -1 : parseInt(seedRaw),
-    generateAudio: document.getElementById('vidGenerateAudio').checked,
-    watermark: document.getElementById('vidWatermark').checked,
-    returnLastFrame: document.getElementById('vidReturnLastFrame').checked,
-    cameraFixed: document.getElementById('vidCameraFixed') ? document.getElementById('vidCameraFixed').checked : false,
-    frames: document.getElementById('vidFrames') ? document.getElementById('vidFrames').value : '',
-    draft: document.getElementById('vidDraft') ? document.getElementById('vidDraft').checked : false,
-    serviceTier: document.getElementById('vidServiceTier') ? document.getElementById('vidServiceTier').value : 'default',
-    webSearch: document.getElementById('vidWebSearch') ? document.getElementById('vidWebSearch').checked : false,
-    priority: document.getElementById('vidPriority') ? parseInt(document.getElementById('vidPriority').value) || 0 : 0,
-    caps
-  };
-
   const btn = document.getElementById('btnGenVideo');
-  videoGenState.isGenerating = true;
-  btn.disabled = true; btn.textContent = '提交中...';
-  setVideoFormDisabled(true);
-  renderVideoTaskStatus('queued', '任务提交中...', 0);
-
-  // 历史记录参数（复用于 pending 记录和成功后更新）
-  const historyParams = { model, resolution: params.resolution, ratio: params.ratio, duration: params.duration, seed: params.seed, audio: params.generateAudio, watermark: params.watermark };
-
   try {
+    const config = await Store.getConfig();
+    if (!config.apiKey) { showToast('请先配置 API Key', 'warning'); switchPage('settings'); return; }
+    const prompt = document.getElementById('vidPrompt').value.trim();
+    if (!prompt) { showToast('请输入提示词', 'warning'); return; }
+
+    const model = document.getElementById('vidModel').value;
+    const mi = VIDEO_MODELS.find(m => m.id === model);
+    if (!mi) return;
+    const caps = mi.caps;
+
+    // 统一素材校验
+    if (vidMode === 'i2v') {
+      const mediaState = {
+        firstFrameImages: vidFirstImage,
+        tailFrameImages: vidTailImage,
+        refImages: vidRefImages,
+        refVideoUrls: vidRefVideoUrls,
+        refAudios: vidRefAudios
+      };
+      const validation = validateVideoMedia(vidMode, mediaState, caps);
+      if (!validation.valid) {
+        showToast(validation.msg, 'warning');
+        return;
+      }
+    }
+
+    // 安全读取种子输入，避免 seedRaw 未定义导致 ReferenceError
+    const seedInput = document.getElementById('vidSeed');
+    const seedRaw = seedInput ? seedInput.value.trim() : '';
+    const parsedSeed = seedRaw === '' ? -1 : Number.parseInt(seedRaw, 10);
+
+    const params = {
+      mode: vidMode, model, prompt,
+      firstFrameImages: vidMode === 'i2v' && vidFirstImage.length > 0 ? vidFirstImage : undefined,
+      tailFrameImages: vidMode === 'i2v' && vidTailImage.length > 0 ? vidTailImage : undefined,
+      refImages: vidMode === 'i2v' && vidRefImages.length > 0 ? vidRefImages : undefined,
+      refVideos: vidMode === 'i2v' && vidRefVideoUrls.length > 0 ? vidRefVideoUrls : undefined,
+      refAudios: vidMode === 'i2v' && vidRefAudios.length > 0 ? vidRefAudios : undefined,
+      resolution: document.getElementById('vidResolution').value,
+      ratio: document.getElementById('vidRatio').value,
+      duration: document.getElementById('vidDuration').value,
+      seed: Number.isFinite(parsedSeed) ? parsedSeed : -1,
+      generateAudio: document.getElementById('vidGenerateAudio').checked,
+      watermark: document.getElementById('vidWatermark').checked,
+      returnLastFrame: document.getElementById('vidReturnLastFrame').checked,
+      cameraFixed: document.getElementById('vidCameraFixed') ? document.getElementById('vidCameraFixed').checked : false,
+      frames: document.getElementById('vidFrames') ? document.getElementById('vidFrames').value : '',
+      draft: document.getElementById('vidDraft') ? document.getElementById('vidDraft').checked : false,
+      serviceTier: document.getElementById('vidServiceTier') ? document.getElementById('vidServiceTier').value : 'default',
+      webSearch: document.getElementById('vidWebSearch') ? document.getElementById('vidWebSearch').checked : false,
+      priority: document.getElementById('vidPriority') ? parseInt(document.getElementById('vidPriority').value) || 0 : 0,
+      caps
+    };
+
+    // 防重复提交
+    if (videoGenState.isGenerating) return;
+    videoGenState.isGenerating = true;
+    btn.disabled = true; btn.textContent = '提交中...';
+    setVideoFormDisabled(true);
+    renderVideoTaskStatus('queued', '任务提交中...', 0);
+
+    // 历史记录参数（复用于 pending 记录和成功后更新）
+    const historyParams = { model, resolution: params.resolution, ratio: params.ratio, duration: params.duration, seed: params.seed, audio: params.generateAudio, watermark: params.watermark };
+
     const submitResult = await submitVideoTask(params);
     if (!submitResult.success) { renderVideoTaskStatus('failed', '提交失败: ' + (submitResult.error || ''), 0); showToast('提交失败', 'error'); return; }
 
@@ -937,7 +944,6 @@ async function handleVideoGenerate() {
       const percent = Math.min((progress.attempt / 60) * 100, 90);
       renderVideoTaskStatus(progress.status, labels[progress.status] || progress.status, percent, progress.attempt);
     }, 5000, 240);
-    window._currentPollingTaskId = null;
 
     if (pollResult.success) {
       const videoUrl = pollResult.data?.content?.video_url;
@@ -946,13 +952,17 @@ async function handleVideoGenerate() {
         renderVideoResult(videoUrl, lastFrameUrl);
         showToast('生成成功！', 'success');
         notifyTaskComplete('video', prompt);
-        // 改动 6/14: 更新历史记录（含尾帧图）
         await Store.updateHistory(pendingRecord.id, {
           result: [videoUrl], lastFrame: lastFrameUrl || null,
           thumbnail: videoUrl, status: 'succeeded'
         });
         window._historyRendered = false;
-      } else { renderVideoTaskStatus('succeeded', '完成但未找到视频URL', 100); }
+      } else {
+        // 任务成功但没有 video_url：标记为失败而非留 pending
+        renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
+        showToast('任务完成但未返回视频URL', 'error');
+        await Store.updateHistory(pendingRecord.id, { status: 'failed' });
+      }
       clearPendingVideoTask();
     } else if (pollResult.timeout && pollResult.taskId) {
       renderVideoTimeout(pollResult.taskId, pendingRecord.id);
@@ -965,9 +975,15 @@ async function handleVideoGenerate() {
       clearPendingVideoTask();
     }
   } catch (e) {
+    console.error('视频提交异常:', e);
     renderVideoTaskStatus('failed', e.message, 0);
-    showToast('错误: ' + e.message, 'error');
-  } finally { videoGenState.isGenerating = false; btn.disabled = false; btn.textContent = '生成视频'; setVideoFormDisabled(false); }
+    showToast('视频提交异常：' + e.message, 'error');
+  } finally {
+    videoGenState.isGenerating = false;
+    window._currentPollingTaskId = null;
+    btn.disabled = false; btn.textContent = '生成视频';
+    setVideoFormDisabled(false);
+  }
 }
 
 function getVidModeLabel(m) { return { 't2v': '文生视频', 'i2v': '图生视频' }[m] || m; }
@@ -1000,8 +1016,10 @@ function renderVideoTimeout(taskId, recordId) {
     const btn = document.getElementById('btnRetryQuery');
     btn.disabled = true; btn.textContent = '查询中...';
     renderVideoTaskStatus('queued', '重新查询中...', 0);
+    window._currentPollingTaskId = taskId;
     try {
       const result = await pollVideoTask(taskId, p => {
+        if (window._currentPollingTaskId !== taskId) return;
         const labels = { queued: '排队中...', running: '生成中...', succeeded: '完成', failed: '失败' };
         const percent = Math.min((p.attempt / 60) * 100, 90);
         renderVideoTaskStatus(p.status, labels[p.status] || p.status, percent, p.attempt);
@@ -1012,18 +1030,31 @@ function renderVideoTimeout(taskId, recordId) {
         if (url) {
           renderVideoResult(url, lf);
           showToast('生成成功！', 'success');
-          // 用 updateHistory 更新已有记录，避免重复
           if (recordId) {
             await Store.updateHistory(recordId, { result: [url], lastFrame: lf || null, thumbnail: url, status: 'succeeded' });
           } else {
             await Store.addHistory({ type: 'video', mode: '视频', params: {}, result: [url], thumbnail: url, taskId, status: 'succeeded' });
           }
           window._historyRendered = false;
-        } else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
+        } else {
+          renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
+          showToast('任务完成但未返回视频URL', 'error');
+          if (recordId) await Store.updateHistory(recordId, { status: 'failed' });
+        }
         clearPendingVideoTask();
       } else if (result.timeout && result.taskId) { renderVideoTimeout(result.taskId, recordId); showToast('仍未完成', 'warning'); }
-      else { renderVideoTaskStatus('failed', result.error || '失败', 0); clearPendingVideoTask(); }
-    } catch (e) { renderVideoTaskStatus('failed', e.message, 0); }
+      else {
+        renderVideoTaskStatus('failed', result.error || '失败', 0);
+        clearPendingVideoTask();
+        if (recordId) await Store.updateHistory(recordId, { status: 'failed' });
+      }
+    } catch (e) {
+      console.error('重新查询异常:', e);
+      renderVideoTaskStatus('failed', e.message, 0);
+      showToast('重新查询异常：' + e.message, 'error');
+    } finally {
+      window._currentPollingTaskId = null;
+    }
   };
 }
 
@@ -1099,8 +1130,13 @@ async function restorePendingVideoTask() {
           });
         }
         window._historyRendered = false;
-      } else renderVideoTaskStatus('succeeded', '完成但未找到URL', 100);
-      clearPendingVideoTask();
+      } else {
+        // 任务成功但没有 video_url：标记为失败而非留 pending
+        renderVideoTaskStatus('failed', '任务完成但未返回视频URL', 0);
+        showToast('任务完成但未返回视频URL', 'error');
+        if (taskInfo.recordId) await Store.updateHistory(taskInfo.recordId, { status: 'failed' });
+        clearPendingVideoTask();
+      }
     } else if (result.timeout && result.taskId) {
       renderVideoTimeout(result.taskId, taskInfo.recordId);
       showToast('任务仍在生成中，可稍后重试', 'warning');

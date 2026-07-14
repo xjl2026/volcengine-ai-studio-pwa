@@ -355,8 +355,8 @@ test('app.js 语法检查', function() {
   new Function(appCode);
 });
 
-test('APP_VERSION = 1.6.6', function() {
-  assert.ok(appCode.indexOf("const APP_VERSION = '1.6.6'") >= 0, 'APP_VERSION should be 1.6.6');
+test('APP_VERSION = 1.6.7', function() {
+  assert.ok(appCode.indexOf("const APP_VERSION = '1.6.7'") >= 0, 'APP_VERSION should be 1.6.7');
 });
 
 test('index.html 包含 migrationActions id', function() {
@@ -364,14 +364,14 @@ test('index.html 包含 migrationActions id', function() {
   assert.ok(html.indexOf('id="migrationActions"') >= 0, 'index.html should contain migrationActions id');
 });
 
-test('index.html 版本号 v1.6.6', function() {
+test('index.html 版本号 v1.6.7', function() {
   var html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-  assert.ok(html.indexOf('v1.6.6') >= 0, 'index.html should contain v1.6.6');
+  assert.ok(html.indexOf('v1.6.7') >= 0, 'index.html should contain v1.6.7');
 });
 
-test('index.html query 参数 v=1.6.6', function() {
+test('index.html query 参数 v=1.6.7', function() {
   var html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-  assert.ok(html.indexOf('app.js?v=1.6.6') >= 0, 'index.html should use ?v=1.6.6');
+  assert.ok(html.indexOf('app.js?v=1.6.7') >= 0, 'index.html should use ?v=1.6.7');
 });
 
 // ============ 提取执行迁移 onclick 收尾逻辑 ============
