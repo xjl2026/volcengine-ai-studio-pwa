@@ -34,6 +34,8 @@ function createElement(id) {
 function setupDOM(opts) {
   opts = opts || {};
   elements = {};
+  deletedIds = {};
+  global.document._dynamicElements = {};
   var ids = [
     'btnGenVideo', 'vidPrompt', 'vidModel', 'vidResolution', 'vidRatio',
     'vidDuration', 'vidSeed', 'vidGenerateAudio', 'vidWatermark',
@@ -62,8 +64,22 @@ function setupDOM(opts) {
   }
 }
 
+// Track which IDs were explicitly deleted from elements (to simulate missing DOM)
+var deletedIds = {};
+
 global.document = {
-  getElementById: function(id) { return elements[id] || null; },
+  _dynamicElements: {},
+  getElementById: function(id) {
+    // Explicitly deleted elements return null
+    if (deletedIds[id]) return null;
+    if (elements[id]) return elements[id];
+    // For dynamically created elements via innerHTML (like btnRetryQuery),
+    // create and register a new dynamic element
+    if (this._dynamicElements[id]) return this._dynamicElements[id];
+    var el = createElement(id);
+    this._dynamicElements[id] = el;
+    return el;
+  },
   querySelectorAll: function() { return []; },
   querySelector: function() { return null; },
   addEventListener: function() {},
@@ -72,35 +88,56 @@ global.document = {
 
 global.window = {
   _currentPollingTaskId: null,
-  _historyRendered: false
+  _historyRendered: false,
+  _restoringTask: false
 };
 global.navigator = { onLine: true };
-global.localStorage = { _data: {}, getItem: function(k) { return this._data[k] || null; }, setItem: function(k, v) { this._data[k] = v; }, removeItem: function(k) { delete this._data[k]; } };
+global.localStorage = {
+  _data: {},
+  getItem: function(k) { return this._data[k] || null; },
+  setItem: function(k, v) { this._data[k] = v; },
+  removeItem: function(k) { delete this._data[k]; }
+};
 
 // ============ Mock state ============
 var toastMessages = [];
-var savedHistoryUpdate = null;
+var savedHistoryUpdates = [];
 var submitVideoCallCount = 0;
 var lastSubmitParams = null;
 var pollVideoCallCount = 0;
 var setVideoFormDisabledCallCount = 0;
 var setVideoFormDisabledLastArg = null;
+var renderVideoTimeoutCallCount = 0;
+var renderVideoResultCallCount = 0;
+var renderVideoTaskStatusCallCount = 0;
+var lastRenderVideoTaskStatus = null;
+var copyToClipboard = async function() { return true; };
 
 var mockConfig = { apiKey: 'test-key', apiDomain: 'https://ark.cn-beijing.volces.com' };
 
 // ============ Mock functions ============
 function showToast(msg, type) { toastMessages.push({ msg: msg, type: type }); }
-function renderVideoTaskStatus() {}
-function renderVideoResult() {}
-function renderVideoTimeout() {}
 function notifyTaskComplete() {}
 function switchPage() {}
 function setVideoFormDisabled(disabled) { setVideoFormDisabledCallCount++; setVideoFormDisabledLastArg = disabled; }
-function savePendingVideoTask() {}
-function clearPendingVideoTask() { global.localStorage.removeItem('volc_pending_task'); }
 function getVidModeLabel(m) { return m; }
 function escapeHtml(s) { return s; }
 function escapeAttr(s) { return s; }
+
+// renderVideoTaskStatus: record calls but also do minimal DOM update
+function renderVideoTaskStatus(status, text, percent, attempt) {
+  renderVideoTaskStatusCallCount++;
+  lastRenderVideoTaskStatus = { status: status, text: text, percent: percent, attempt: attempt };
+  var panel = elements.vidResultPanel;
+  if (panel) panel.innerHTML = '<div class="task-status"><div class="status-text">' + escapeHtml(text) + '</div></div>';
+}
+
+// renderVideoResult: record calls
+function renderVideoResult(url, lastFrameUrl) {
+  renderVideoResultCallCount++;
+  var panel = elements.vidResultPanel;
+  if (panel) panel.innerHTML = '<div class="result-content"><video src="' + escapeAttr(url) + '"></video></div>';
+}
 
 var videoGenState = { isGenerating: false };
 var vidMode = 'i2v';
@@ -134,14 +171,14 @@ apiCode = apiCode.replace('const IMAGE_MODELS =', 'var IMAGE_MODELS =');
 apiCode = apiCode.replace('const VIDEO_MODELS =', 'var VIDEO_MODELS =');
 eval(apiCode);
 
-// 替换 Store 为 mock 版本（api.js 的 Store 依赖 localStorage，我们用 mock）
+// 替换 Store 为 mock 版本
 Store = {
   getConfig: async function() { return mockConfig; },
   addHistory: async function(record) { return Object.assign({ id: 'rec-001' }, record); },
-  updateHistory: async function(id, updates) { savedHistoryUpdate = { id: id, updates: updates }; return true; }
+  updateHistory: async function(id, updates) { savedHistoryUpdates.push({ id: id, updates: updates }); return true; }
 };
 
-// 替换 submitVideoTask 和 pollVideoTask（api.js 的版本会发送真实 HTTP 请求）
+// 替换 submitVideoTask 和 pollVideoTask
 submitVideoTask = async function(params) {
   submitVideoCallCount++;
   lastSubmitParams = params;
@@ -153,24 +190,47 @@ pollVideoTask = async function(taskId, onProgress, interval, maxAttempts) {
   return pollVideoResult;
 };
 
-// ============ 加载 app.js 并提取 handleVideoGenerate 函数体 ============
+// ============ 加载 app.js 并提取生产函数 ============
 var appCode = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 
-// 提取 handleVideoGenerate 完整函数
+// 提取 handleVideoGenerate
 var handlerMatch = appCode.match(/async function handleVideoGenerate\(\)\s*\{[\s\S]*?\n\}/);
 assert.ok(handlerMatch, '必须找到 handleVideoGenerate 定义');
-var handlerSource = handlerMatch[0];
+eval(handlerMatch[0]);
 
-// 使用 eval 在当前作用域定义函数 — 当前作用域有所有需要的 mock 变量
-eval(handlerSource);
+// 提取 renderVideoTimeout（真实函数，会创建 btnRetryQuery 并绑定 onclick）
+var timeoutMatch = appCode.match(/function renderVideoTimeout\(taskId, recordId\)\s*\{[\s\S]*?\n\}/);
+assert.ok(timeoutMatch, '必须找到 renderVideoTimeout 定义');
+eval(timeoutMatch[0]);
 
-// 也提取 buildVideoRequestBody（已在 api.js eval 中定义）
+// 提取 savePendingVideoTask（真实函数，写入 localStorage）
+var saveMatch = appCode.match(/function savePendingVideoTask\(taskId, vidModeSnapshot, prompt, recordId, params\)\s*\{[\s\S]*?\n\}/);
+assert.ok(saveMatch, '必须找到 savePendingVideoTask 定义');
+eval(saveMatch[0]);
+
+// 提取 clearPendingVideoTask（真实函数，清除 localStorage）
+var clearMatch = appCode.match(/function clearPendingVideoTask\(\)\s*\{[\s\S]*?\n\}/);
+assert.ok(clearMatch, '必须找到 clearPendingVideoTask 定义');
+eval(clearMatch[0]);
+
+// 提取 getValidPendingVideoTask（真实函数，校验 pending task 有效性）
+var getValidMatch = appCode.match(/function getValidPendingVideoTask\(\)\s*\{[\s\S]*?\n\}/);
+assert.ok(getValidMatch, '必须找到 getValidPendingVideoTask 定义');
+eval(getValidMatch[0]);
+
+// 提取 restorePendingVideoTask（真实函数，执行恢复轮询）
+var restoreMatch = appCode.match(/async function restorePendingVideoTask\(\)\s*\{[\s\S]*?\n\}/);
+assert.ok(restoreMatch, '必须找到 restorePendingVideoTask 定义');
+eval(restoreMatch[0]);
+
+// buildVideoRequestBody 已在 api.js eval 中定义
 assert.ok(typeof buildVideoRequestBody === 'function', 'buildVideoRequestBody must be loaded');
 
 // ============ 测试辅助 ============
 function setupTestEnvironment(opts) {
   opts = opts || {};
   setupDOM(opts);
+  // setupDOM already clears deletedIds and dynamicElements
   vidMode = opts.vidMode || 'i2v';
   vidFirstImage = opts.vidFirstImage || [];
   vidTailImage = opts.vidTailImage || [];
@@ -180,17 +240,24 @@ function setupTestEnvironment(opts) {
   videoGenState.isGenerating = false;
   global.window._currentPollingTaskId = null;
   global.window._historyRendered = false;
+  global.window._restoringTask = false;
   submitVideoCallCount = 0;
   pollVideoCallCount = 0;
   lastSubmitParams = null;
   toastMessages = [];
-  savedHistoryUpdate = null;
+  savedHistoryUpdates = [];
   submitVideoResult = { success: true, data: { id: 'test-task-001' } };
   pollVideoResult = { success: true, data: { content: { video_url: 'https://example.com/video.mp4' } } };
   validateVideoMediaResult = { valid: true, msg: '' };
   setVideoFormDisabledCallCount = 0;
   setVideoFormDisabledLastArg = null;
-  // 每次都重新赋值 mock 函数，防止被其他测试覆盖后残留
+  renderVideoTimeoutCallCount = 0;
+  renderVideoResultCallCount = 0;
+  renderVideoTaskStatusCallCount = 0;
+  lastRenderVideoTaskStatus = null;
+  // 清空 localStorage
+  global.localStorage._data = {};
+  // 每次都重新赋值 mock 函数
   submitVideoTask = async function(params) {
     submitVideoCallCount++;
     lastSubmitParams = params;
@@ -283,7 +350,7 @@ test('vidSeed 输入非法: seed 为 -1', async function() {
 // --- 6. 参数构造阶段异常显示 Toast 并恢复按钮 ---
 test('参数构造异常: Toast 显示并恢复按钮', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
-  delete elements.vidResolution;
+  deletedIds.vidResolution = true;
   await handleVideoGenerate();
   assert.ok(toastMessages.some(function(t) { return t.type === 'error'; }), '应显示 error Toast');
   assert.strictEqual(videoGenState.isGenerating, false, 'isGenerating 应恢复为 false');
@@ -301,14 +368,34 @@ test('API 提交失败: 恢复按钮和 isGenerating', async function() {
   assert.strictEqual(elements.btnGenVideo.textContent, '生成视频', '按钮文字应恢复');
 });
 
-// --- 8. 轮询抛异常后清理 _currentPollingTaskId ---
-test('轮询异常: 清理 _currentPollingTaskId', async function() {
+// --- 8. 主生成流程：取得 taskId 后轮询异常 → 可恢复 ---
+test('主流程轮询异常: pending 保留 + timeout + 不显示提交异常', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
-  // 替换 pollVideoTask 为抛出异常的版本
+  // pollVideoTask 抛出网络异常
   pollVideoTask = async function() { throw new Error('网络断开'); };
 
   await handleVideoGenerate();
-  assert.strictEqual(global.window._currentPollingTaskId, null, '轮询异常后 _currentPollingTaskId 应为 null');
+
+  // pending task 应保留（未被清除）
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, 'pending task 应保留在 localStorage 中');
+  var pendingObj = JSON.parse(pendingRaw);
+  assert.strictEqual(pendingObj.taskId, 'test-task-001', 'pending task 的 taskId 应未被覆盖');
+
+  // 历史状态应更新为 timeout
+  var timeoutUpdate = savedHistoryUpdates.find(function(u) { return u.updates.status === 'timeout'; });
+  assert.ok(timeoutUpdate, '历史记录状态应更新为 timeout');
+
+  // 不应显示"视频提交异常"
+  assert.ok(!toastMessages.some(function(t) { return t.msg.indexOf('视频提交异常') >= 0; }), '不应显示"视频提交异常"');
+
+  // 应显示查询中断提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('查询暂时中断') >= 0; }), '应显示查询中断提示');
+
+  // _currentPollingTaskId 应清理
+  assert.strictEqual(global.window._currentPollingTaskId, null, '_currentPollingTaskId 应为 null');
+
+  // isGenerating 应恢复
   assert.strictEqual(videoGenState.isGenerating, false, 'isGenerating 应恢复为 false');
 });
 
@@ -318,8 +405,8 @@ test('成功但无 video_url: 标记为 failed 不留 pending', async function()
   pollVideoResult = { success: true, data: { content: {} } };
   await handleVideoGenerate();
   assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('未返回视频URL') >= 0; }), '应显示未返回视频URL提示');
-  assert.ok(savedHistoryUpdate, 'Store.updateHistory 应被调用');
-  assert.strictEqual(savedHistoryUpdate.updates.status, 'failed', '记录状态应为 failed');
+  var failedUpdate = savedHistoryUpdates.find(function(u) { return u.updates.status === 'failed'; });
+  assert.ok(failedUpdate, 'Store.updateHistory 应更新为 failed');
   assert.strictEqual(global.localStorage.getItem('volc_pending_task'), null, 'pending task 应被清除');
 });
 
@@ -336,62 +423,178 @@ test('素材校验失败: 不调用 API', async function() {
 test('并发: 第二次调用不释放第一次的锁', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
 
-  // 用可控的 pending Promise 控制 submitVideoTask 的完成时机
   var resolveSubmit;
   submitVideoTask = async function(params) {
     submitVideoCallCount++;
     lastSubmitParams = params;
-    // 返回一个不会自动完成的 Promise，等待外部 resolve
     return new Promise(function(resolve) { resolveSubmit = resolve; });
   };
-  // pollVideoTask 不会被调用到（submitVideoTask 未完成），但以防万一设个默认值
   pollVideoTask = async function(taskId, onProgress) {
     pollVideoCallCount++;
     return pollVideoResult;
   };
 
-  // 启动第一次调用（不 await，让它在 submitVideoTask 处挂起）
   var firstCall = handleVideoGenerate();
-
-  // 让微任务队列跑一轮，让第一次调用执行到 await submitVideoTask
   await new Promise(function(r) { setTimeout(r, 0); });
 
-  // 第一次调用应该已抢占锁
   assert.strictEqual(videoGenState.isGenerating, true, '第一次调用后 isGenerating 应为 true');
   assert.strictEqual(elements.btnGenVideo.disabled, true, '第一次调用后按钮应 disabled');
-  assert.strictEqual(elements.btnGenVideo.textContent, '提交中...', '第一次调用后按钮文字应为"提交中..."');
+  assert.strictEqual(elements.btnGenVideo.textContent, '提交中...', '按钮文字应为"提交中..."');
+  assert.strictEqual(submitVideoCallCount, 1, 'submitVideoTask 应被调用1次');
 
-  // 第一次 submitVideoTask 应已调用一次
-  assert.strictEqual(submitVideoCallCount, 1, '第一次调用后 submitVideoTask 应被调用1次');
-
-  // 第二次调用（第一次尚未结束）
   var secondCall = handleVideoGenerate();
-
-  // 让微任务队列跑一轮
   await new Promise(function(r) { setTimeout(r, 0); });
 
-  // 第二次调用应直接返回（锁被占用），不释放第一次的锁
   assert.strictEqual(videoGenState.isGenerating, true, '第二次调用后 isGenerating 仍应为 true');
   assert.strictEqual(elements.btnGenVideo.disabled, true, '第二次调用后按钮仍应 disabled');
-  // submitVideoTask 仍只被调用一次（第二次未进入提交逻辑）
   assert.strictEqual(submitVideoCallCount, 1, '第二次调用不应额外调用 submitVideoTask');
 
-  // 等第二次调用完成（它是同步返回的，但 await 一下确保安全）
   await secondCall;
-
-  // 释放第一次的 Promise
   resolveSubmit(submitVideoResult);
-
-  // 等第一次调用完成
   await firstCall;
 
-  // 第一次完成后锁应释放
   assert.strictEqual(videoGenState.isGenerating, false, '第一次完成后 isGenerating 应为 false');
   assert.strictEqual(elements.btnGenVideo.disabled, false, '第一次完成后按钮应恢复可点击');
-  assert.strictEqual(elements.btnGenVideo.textContent, '生成视频', '第一次完成后按钮文字应恢复');
+  assert.strictEqual(elements.btnGenVideo.textContent, '生成视频', '按钮文字应恢复');
 });
 
-// --- 12. 语法检查 ---
+// --- 12. 存在有效 pending task 时点击生成 → 不提交新任务 ---
+test('存在 pending task: 阻止新任务并触发恢复', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设一个有效的 pending task
+  savePendingVideoTask('old-task-999', 'i2v', '旧任务提示词', 'rec-old-001', { model: 'test' });
+
+  // pollVideoTask 设为可控（restorePendingVideoTask 会被调用）
+  pollVideoTask = async function(taskId, onProgress) {
+    pollVideoCallCount++;
+    return pollVideoResult;
+  };
+
+  await handleVideoGenerate();
+
+  // submitVideoTask 不应被调用（新任务被阻止）
+  assert.strictEqual(submitVideoCallCount, 0, '存在 pending task 时不应提交新任务');
+
+  // 原 taskId 不应被覆盖
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, 'pending task 应仍存在');
+  var pendingObj = JSON.parse(pendingRaw);
+  assert.strictEqual(pendingObj.taskId, 'old-task-999', '原 taskId 不应被覆盖');
+
+  // 应显示 warning 提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('已有未完成的视频任务') >= 0; }), '应显示已有未完成任务提示');
+
+  // 应触发恢复（pollVideoTask 应被调用）
+  assert.ok(pollVideoCallCount >= 1, '应触发旧任务恢复轮询');
+});
+
+// --- 13. 过期的 pending task 被安全清除，不阻止新任务 ---
+test('过期 pending task: 安全清除后正常提交', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设一个过期的 pending task（超过 48 小时）
+  var expiredTime = Date.now() - 49 * 3600 * 1000;
+  global.localStorage.setItem('volc_pending_task', JSON.stringify({
+    taskId: 'expired-task', vidMode: 'i2v', prompt: '过期任务', recordId: 'rec-expired',
+    params: {}, savedAt: expiredTime
+  }));
+
+  await handleVideoGenerate();
+
+  // 新任务应正常提交
+  assert.strictEqual(submitVideoCallCount, 1, '过期 task 清除后应正常提交新任务');
+
+  // 过期 task 应已被 getValidPendingVideoTask 清除（新任务提交成功完成后会再次 clear）
+  // 成功完成后 pending task 会被 clearPendingVideoTask 清除
+  assert.strictEqual(global.localStorage.getItem('volc_pending_task'), null, '成功完成后 pending task 应被清除');
+});
+
+// --- 14. 损坏的 pending task 被安全清除，不阻止新任务 ---
+test('损坏 pending task: 安全清除后正常提交', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设损坏的 pending task（无效 JSON）
+  global.localStorage.setItem('volc_pending_task', 'this is not valid json {{{');
+
+  await handleVideoGenerate();
+
+  // 新任务应正常提交
+  assert.strictEqual(submitVideoCallCount, 1, '损坏 task 清除后应正常提交新任务');
+});
+
+// --- 15. restorePendingVideoTask 网络异常 → 保持可恢复 ---
+test('恢复任务网络异常: pending 保留 + timeout + 重新查询入口', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 预设有效的 pending task
+  savePendingVideoTask('restore-task-001', 'i2v', '恢复任务提示词', 'rec-restore-001', { model: 'test' });
+
+  // pollVideoTask 抛出网络异常
+  pollVideoTask = async function() { throw new Error('恢复时网络断开'); };
+
+  await restorePendingVideoTask();
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, '恢复异常后 pending task 应保留');
+  var pendingObj = JSON.parse(pendingRaw);
+  assert.strictEqual(pendingObj.taskId, 'restore-task-001', 'taskId 不应变');
+
+  // 历史状态应更新为 timeout
+  var timeoutUpdate = savedHistoryUpdates.find(function(u) { return u.updates.status === 'timeout'; });
+  assert.ok(timeoutUpdate, '历史记录应更新为 timeout');
+
+  // 应显示查询中断提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('查询暂时中断') >= 0; }), '应显示查询中断提示');
+
+  // _currentPollingTaskId 应清理
+  assert.strictEqual(global.window._currentPollingTaskId, null, '_currentPollingTaskId 应为 null');
+
+  // vidResultPanel innerHTML 应包含 btnRetryQuery（renderVideoTimeout 被调用）
+  assert.ok(elements.vidResultPanel.innerHTML.indexOf('btnRetryQuery') >= 0, '应显示重新查询按钮');
+});
+
+// --- 16. btnRetryQuery 网络异常 → 保持可恢复 ---
+test('重新查询网络异常: pending 保留 + timeout + 重试按钮重新出现', async function() {
+  setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
+
+  // 先调用 renderVideoTimeout 创建 btnRetryQuery
+  renderVideoTimeout('retry-task-001', 'rec-retry-001');
+
+  // 确认 btnRetryQuery 存在
+  var retryBtn = document.getElementById('btnRetryQuery');
+  assert.ok(retryBtn, 'btnRetryQuery 应存在');
+
+  // 预设 pending task
+  savePendingVideoTask('retry-task-001', 'i2v', '重试任务', 'rec-retry-001', { model: 'test' });
+
+  // pollVideoTask 抛出网络异常
+  pollVideoTask = async function() { throw new Error('重试时网络断开'); };
+
+  // 触发 onclick（这是 async 函数）
+  await retryBtn.onclick();
+
+  // pending task 应保留
+  var pendingRaw = global.localStorage.getItem('volc_pending_task');
+  assert.ok(pendingRaw, '重新查询异常后 pending task 应保留');
+
+  // 历史状态应更新为 timeout
+  var timeoutUpdate = savedHistoryUpdates.find(function(u) { return u.updates.status === 'timeout'; });
+  assert.ok(timeoutUpdate, '历史记录应更新为 timeout');
+
+  // 应显示查询中断提示
+  assert.ok(toastMessages.some(function(t) { return t.msg.indexOf('查询暂时中断') >= 0; }), '应显示查询中断提示');
+
+  // _currentPollingTaskId 应清理
+  assert.strictEqual(global.window._currentPollingTaskId, null, '_currentPollingTaskId 应为 null');
+
+  // btnRetryQuery 应重新出现（renderVideoTimeout 被再次调用）
+  var newRetryBtn = document.getElementById('btnRetryQuery');
+  assert.ok(newRetryBtn, 'btnRetryQuery 应重新出现');
+});
+
+// --- 17. 语法检查 ---
 test('app.js 语法检查', function() {
   new Function(appCode);
 });
@@ -400,7 +603,7 @@ test('api.js 语法检查', function() {
   new Function(apiCode);
 });
 
-// --- 13. 版本号检查 ---
+// --- 18. 版本号检查 ---
 test('APP_VERSION = 1.6.7', function() {
   assert.ok(appCode.indexOf("const APP_VERSION = '1.6.7'") >= 0, 'APP_VERSION should be 1.6.7');
 });
@@ -410,7 +613,7 @@ test('index.html 版本号 v1.6.7', function() {
   assert.ok(html.indexOf('v1.6.7') >= 0, 'index.html should contain v1.6.7');
 });
 
-// --- 14. seedRaw 安全定义检查 ---
+// --- 19. seedRaw 安全定义检查 ---
 test('app.js handleVideoGenerate 不直接引用未定义的 seedRaw', function() {
   var fnMatch = appCode.match(/async function handleVideoGenerate\(\)\s*\{[\s\S]*?\n\}/);
   assert.ok(fnMatch, 'handleVideoGenerate must exist');
@@ -421,7 +624,7 @@ test('app.js handleVideoGenerate 不直接引用未定义的 seedRaw', function(
   assert.ok(fnBody.indexOf(oldPattern) === -1, '不应残留旧的无定义 seedRaw 用法');
 });
 
-// --- 15. 锁在 try 之前抢占检查 ---
+// --- 20. 锁在 try 之前抢占检查 ---
 test('锁抢占在 try/finally 之前', function() {
   var fnMatch = appCode.match(/async function handleVideoGenerate\(\)\s*\{[\s\S]*?\n\}/);
   assert.ok(fnMatch, 'handleVideoGenerate must exist');
@@ -432,15 +635,13 @@ test('锁抢占在 try/finally 之前', function() {
   assert.ok(lockCheckIdx >= 0, '应有 isGenerating 检查');
   assert.ok(lockSetIdx >= 0, '应有 isGenerating = true');
   assert.ok(tryIdx >= 0, '应有 try {');
-  // 锁检查和设置必须在 try 之前
   assert.ok(lockCheckIdx < tryIdx, '锁检查必须在 try 之前');
   assert.ok(lockSetIdx < tryIdx, '锁设置必须在 try 之前');
-  // 不应在 try 内部重复设置 isGenerating = true
   var afterTry = fnBody.substring(tryIdx);
   assert.ok(afterTry.indexOf('videoGenState.isGenerating = true;') === -1, 'try 内不应重复设置 isGenerating = true');
 });
 
-// --- 16. 非法 API Key 时锁恢复 ---
+// --- 21. 非法 API Key 时锁恢复 ---
 test('非法 API Key: 锁恢复且不调用 API', async function() {
   setupTestEnvironment({ vidMode: 'i2v', vidFirstImage: ['data:image/png;base64,abc'] });
   Store.getConfig = async function() { return { apiKey: '', apiDomain: '' }; };
@@ -448,8 +649,15 @@ test('非法 API Key: 锁恢复且不调用 API', async function() {
   assert.strictEqual(videoGenState.isGenerating, false, 'isGenerating 应恢复为 false');
   assert.strictEqual(submitVideoCallCount, 0, '无 API Key 时不应调用 submitVideoTask');
   assert.strictEqual(elements.btnGenVideo.disabled, false, '按钮应恢复可点击');
-  // 恢复 Store.getConfig
   Store.getConfig = async function() { return mockConfig; };
+});
+
+// --- 22. getValidPendingVideoTask 函数存在性检查 ---
+test('getValidPendingVideoTask 函数存在', function() {
+  assert.ok(typeof getValidPendingVideoTask === 'function', 'getValidPendingVideoTask 应为函数');
+  assert.ok(typeof savePendingVideoTask === 'function', 'savePendingVideoTask 应为函数');
+  assert.ok(typeof clearPendingVideoTask === 'function', 'clearPendingVideoTask 应为函数');
+  assert.ok(typeof restorePendingVideoTask === 'function', 'restorePendingVideoTask 应为函数');
 });
 
 // ============ 运行 ============

@@ -854,6 +854,15 @@ async function handleVideoGenerate() {
 
   // 必须在任何 await 和 try/finally 之前抢占生成锁
   if (videoGenState.isGenerating) return;
+
+  // 检查是否存在有效的待恢复任务（同步操作，不含 await）
+  const pendingTask = getValidPendingVideoTask();
+  if (pendingTask) {
+    showToast('已有未完成的视频任务，请先查询该任务结果', 'warning');
+    restorePendingVideoTask();
+    return;
+  }
+
   videoGenState.isGenerating = true;
 
   // 锁抢占后立即设置 UI 禁用状态，避免状态管理散落两处
@@ -862,6 +871,10 @@ async function handleVideoGenerate() {
     btn.textContent = '提交中...';
   }
   setVideoFormDisabled(true);
+
+  // 跟踪是否已取得 taskId（决定 catch 中走"可恢复"还是"提交异常"分支）
+  let submittedTaskId = null;
+  let submittedRecordId = null;
 
   try {
     const config = await Store.getConfig();
@@ -936,6 +949,10 @@ async function handleVideoGenerate() {
     });
     window._historyRendered = false;
 
+    // 记录已提交的 taskId 和 recordId，供 catch 分支判断
+    submittedTaskId = taskId;
+    submittedRecordId = pendingRecord.id;
+
     // 改动 7: 保存更多参数到 localStorage
     savePendingVideoTask(taskId, vidMode, prompt, pendingRecord.id, historyParams);
 
@@ -983,8 +1000,18 @@ async function handleVideoGenerate() {
     }
   } catch (e) {
     console.error('视频提交异常:', e);
-    renderVideoTaskStatus('failed', e.message, 0);
-    showToast('视频提交异常：' + e.message, 'error');
+    if (submittedTaskId) {
+      // 已取得 taskId 后的异常（通常是轮询网络异常）：进入可恢复状态
+      if (submittedRecordId) {
+        try { await Store.updateHistory(submittedRecordId, { status: 'timeout' }); } catch (_) {}
+      }
+      renderVideoTimeout(submittedTaskId, submittedRecordId);
+      showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
+    } else {
+      // 尚未取得 taskId：真正的提交异常
+      renderVideoTaskStatus('failed', e.message, 0);
+      showToast('视频提交异常：' + e.message, 'error');
+    }
   } finally {
     videoGenState.isGenerating = false;
     window._currentPollingTaskId = null;
@@ -1060,8 +1087,12 @@ function renderVideoTimeout(taskId, recordId) {
       }
     } catch (e) {
       console.error('重新查询异常:', e);
-      renderVideoTaskStatus('failed', e.message, 0);
-      showToast('重新查询异常：' + e.message, 'error');
+      // 网络异常时不清除 pending task，保持可恢复
+      if (recordId) {
+        try { await Store.updateHistory(recordId, { status: 'timeout' }); } catch (_) {}
+      }
+      renderVideoTimeout(taskId, recordId);
+      showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
     } finally {
       window._currentPollingTaskId = null;
     }
@@ -1079,20 +1110,34 @@ function clearPendingVideoTask() {
   localStorage.removeItem('volc_pending_task');
 }
 
+function getValidPendingVideoTask() {
+  const raw = localStorage.getItem('volc_pending_task');
+  if (!raw) return null;
+
+  try {
+    const task = JSON.parse(raw);
+    if (!task.taskId || !task.savedAt) {
+      clearPendingVideoTask();
+      return null;
+    }
+
+    if (Date.now() - task.savedAt > 48 * 3600 * 1000) {
+      clearPendingVideoTask();
+      return null;
+    }
+
+    return task;
+  } catch (e) {
+    clearPendingVideoTask();
+    return null;
+  }
+}
+
 async function restorePendingVideoTask() {
   // 改动 3: 重入锁
   if (window._restoringTask) return;
-  const raw = localStorage.getItem('volc_pending_task');
-  if (!raw) return;
-
-  let taskInfo;
-  try { taskInfo = JSON.parse(raw); } catch { clearPendingVideoTask(); return; }
-
-  // 超过 48 小时的任务清掉
-  if (Date.now() - taskInfo.savedAt > 48 * 3600 * 1000) {
-    clearPendingVideoTask();
-    return;
-  }
+  const taskInfo = getValidPendingVideoTask();
+  if (!taskInfo) return;
 
   // 如果当前已有该任务的轮询在跑，不重复恢复
   if (window._currentPollingTaskId === taskInfo.taskId) return;
@@ -1158,8 +1203,13 @@ async function restorePendingVideoTask() {
       clearPendingVideoTask();
     }
   } catch (e) {
-    renderVideoTaskStatus('failed', e.message, 0);
-    clearPendingVideoTask();
+    // 网络异常时不删除待恢复任务，保留 taskId/recordId 和 localStorage 信息
+    console.error('恢复任务查询异常:', e);
+    if (taskInfo.recordId) {
+      try { await Store.updateHistory(taskInfo.recordId, { status: 'timeout' }); } catch (_) {}
+    }
+    renderVideoTimeout(taskInfo.taskId, taskInfo.recordId);
+    showToast('任务已提交，但查询暂时中断，请稍后重新查询', 'warning');
   } finally {
     window._restoringTask = false;
     window._currentPollingTaskId = null;
