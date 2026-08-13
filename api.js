@@ -20,6 +20,10 @@ const IMAGE_MODELS = [
 ];
 
 const VIDEO_MODELS = [
+  // Seedance 2.5：仅启用已由当前官方请求示例确认的多模态参考参数。
+  // 暂不主动发送 resolution，也不继承 2.0 的 webSearch/priority 等扩展参数。
+  { id: 'doubao-seedance-2-5-260628', name: 'Seedance 2.5（多模态参考）', resolutions: ['默认'], durationRange: [4, 15],
+    caps: { supportsFirstFrame: false, supportsLastFrame: false, generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: false, maxDuration: 15, referenceImage: true, maxRefImages: 2, referenceVideo: true, maxRefVideos: 1, referenceAudio: true, maxRefAudios: 1, refAudioRequiresOther: true, outputFpsSelectable: false, webSearch: false, priority: false, omitResolution: true, allowedRatios: ['16:9'] } },
   { id: 'doubao-seedance-2-0-260128', name: 'Seedance 2.0', resolutions: ['480p', '720p', '1080p', '4k'], durationRange: [4, 15],
     caps: { supportsFirstFrame: true, supportsLastFrame: true, generateAudio: true, seed: false, cameraFixed: false, frames: false, draft: false, serviceTier: false, adaptiveRatio: true, maxDuration: 15, referenceImage: true, maxRefImages: 9, referenceVideo: true, maxRefVideos: 3, refVideoMinDuration: 2, refVideoMaxDuration: 15, refVideoMaxTotalDuration: 15, refVideoMaxSize: 209715200, refVideoFormats: ['mp4', 'mov'], refVideoMinFps: 24, refVideoMaxFps: 60, referenceAudio: true, maxRefAudios: 3, refAudioMinDuration: 2, refAudioMaxDuration: 15, refAudioMaxTotalDuration: 15, refAudioMaxSize: 15728640, refAudioFormats: ['wav', 'mp3'], refAudioRequiresOther: true, outputFps: 24, outputFpsSelectable: false, webSearch: true, priority: true } },
   { id: 'doubao-seedance-2-0-fast-260128', name: 'Seedance 2.0 Fast', resolutions: ['480p', '720p'], durationRange: [4, 15],
@@ -326,8 +330,14 @@ function buildVideoRequestBody(params) {
       refAudios.forEach(url => body.content.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' }));
     }
   }
-  if (resolution) body.resolution = resolution;
-  if (ratio) body.ratio = ratio;
+  if (resolution && !(caps && caps.omitResolution)) body.resolution = resolution;
+  if (ratio) {
+    if (caps && Array.isArray(caps.allowedRatios) && caps.allowedRatios.length > 0) {
+      body.ratio = caps.allowedRatios.includes(ratio) ? ratio : caps.allowedRatios[0];
+    } else {
+      body.ratio = ratio;
+    }
+  }
   if (caps && caps.frames && frames && frames !== '') {
     body.frames = parseInt(frames);
   } else if (duration !== undefined && duration !== '') {
@@ -340,9 +350,9 @@ function buildVideoRequestBody(params) {
   if (caps && caps.seed && seed !== undefined && seed !== '' && seed !== -1) body.seed = parseInt(seed);
   if (caps && caps.draft && draft) body.draft = true;
   if (caps && caps.serviceTier && serviceTier && serviceTier !== 'default') body.service_tier = serviceTier;
-  // 联网搜索（仅 2.0 系列）
+  // 联网搜索（仅支持明确声明该能力的模型）
   if (caps && caps.webSearch && webSearch) body.tools = [{ type: 'web_search' }];
-  // 排队优先级（仅 2.0 系列）
+  // 排队优先级（仅支持明确声明该能力的模型）
   if (caps && caps.priority && priority !== undefined && priority !== 0) body.priority = parseInt(priority);
   return body;
 }
