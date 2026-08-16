@@ -1,7 +1,7 @@
 // Service Worker - 离线缓存
 // 每次构建替换 CACHE_NAME 以确保旧缓存被清除
-// v1.7.1 - Seedance 2.5 官方能力适配
-const CACHE_NAME = 'volc-ai-1.7.1-20260816';
+// v1.7.2 - Seedance 2.5 R2V resolution hotfix
+const CACHE_NAME = 'volc-ai-1.7.2-20260816';
 const CACHE_FILES = [
   './',
   './index.html',
