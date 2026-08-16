@@ -1,7 +1,7 @@
 // Service Worker - 离线缓存
 // 每次构建替换 CACHE_NAME 以确保旧缓存被清除
-// v1.7.4 - Seedance 2.5 resolution selection + R2V fallback
-const CACHE_NAME = 'volc-ai-1.7.4-20260816';
+// v1.7.5 - reference video add feedback + visible confirmation
+const CACHE_NAME = 'volc-ai-1.7.5-20260817';
 const CACHE_FILES = [
   './',
   './index.html',
