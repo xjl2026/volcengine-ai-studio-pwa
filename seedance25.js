@@ -1,10 +1,10 @@
-// Seedance 2.5 官方能力适配层 - v1.7.3
+// Seedance 2.5 官方能力适配层 - v1.7.4
 // 依据 2026-08-16 官方文档 + R2V 实际 API 返回校准。
 (function () {
   'use strict';
 
   const ID = 'doubao-seedance-2-5-260628';
-  const VERSION = '1.7.3';
+  const VERSION = '1.7.4';
 
   function getModel() {
     if (typeof VIDEO_MODELS === 'undefined') return null;
@@ -81,7 +81,7 @@
   }
 
   function patchApiLayer() {
-    if (typeof buildVideoRequestBody === 'function' && !buildVideoRequestBody.__seedance25v173) {
+    if (typeof buildVideoRequestBody === 'function' && !buildVideoRequestBody.__seedance25v174) {
       const originalBuild = buildVideoRequestBody;
       const wrapped = function (params) {
         const body = originalBuild(params);
@@ -91,11 +91,11 @@
         const refMode = hasReferences(params);
         const taskMode = getTaskMode();
 
-        // Seedance 2.5 官方能力包含 480p / 720p，默认 720p。
-        // 但 2026-08-16 实测 R2V 路由会拒绝显式 resolution 参数，
-        // 因此 R2V 请求层省略该字段；界面仍显示 720p（官方默认），
-        // 实际返回像素规格由当前服务端路由决定。
-        if (refMode && !frameMode) {
+        // 官方文档：Seedance 2.5 支持 480p / 720p，默认 720p。
+        // 正常情况下保留用户选择的 resolution。
+        // 若当前 R2V 路由实际拒绝该参数，submitVideoTask 会自动以 fallback 标记重试，
+        // 仅在重试请求中移除 resolution，避免用户手工改参数。
+        if (params.__sd25ResolutionFallback && refMode && !frameMode) {
           delete body.resolution;
         }
 
@@ -124,11 +124,11 @@
         body.output_format = getOutputFormat();
         return body;
       };
-      wrapped.__seedance25v173 = true;
+      wrapped.__seedance25v174 = true;
       buildVideoRequestBody = wrapped;
     }
 
-    if (typeof submitVideoTask === 'function' && !submitVideoTask.__seedance25v173) {
+    if (typeof submitVideoTask === 'function' && !submitVideoTask.__seedance25v174) {
       const originalSubmit = submitVideoTask;
       const wrappedSubmit = async function (params) {
         if (params?.model === ID && !hasFrames(params)) {
@@ -142,16 +142,33 @@
           if ((mode === 'edit' || mode === 'extend') && !hasVideo) {
             return { success: false, error: '视频编辑 / 视频延长必须至少添加 1 个参考视频' };
           }
+
+          const firstResult = await originalSubmit(params);
+          const err = String(firstResult?.error || '');
+          const isResolutionRejected = hasRef &&
+            /resolution/i.test(err) &&
+            /(not valid|invalid|不支持|不合法|不可用)/i.test(err);
+
+          if (!firstResult?.success && isResolutionRejected && !params.__sd25ResolutionFallback) {
+            if (typeof showToast === 'function') {
+              showToast('当前 R2V 路由未接受所选分辨率，正在自动兼容重试', 'warning');
+            }
+            const retryParams = { ...params, __sd25ResolutionFallback: true };
+            const retryResult = await originalSubmit(retryParams);
+            if (retryResult?.success) retryResult.resolutionFallback = true;
+            return retryResult;
+          }
+          return firstResult;
         }
         return originalSubmit(params);
       };
-      wrappedSubmit.__seedance25v173 = true;
+      wrappedSubmit.__seedance25v174 = true;
       submitVideoTask = wrappedSubmit;
     }
   }
 
   function patchAppValidation() {
-    if (typeof validateVideoMedia !== 'function' || validateVideoMedia.__seedance25v173) return;
+    if (typeof validateVideoMedia !== 'function' || validateVideoMedia.__seedance25v174) return;
     const originalValidate = validateVideoMedia;
     const wrappedValidate = function (mode, mediaState, caps) {
       const result = originalValidate(mode, mediaState, caps);
@@ -162,7 +179,7 @@
       }
       return result;
     };
-    wrappedValidate.__seedance25v173 = true;
+    wrappedValidate.__seedance25v174 = true;
     validateVideoMedia = wrappedValidate;
   }
 
@@ -351,8 +368,9 @@
     if (option720) option720.textContent = isR2V ? '720p（官方默认）' : '720p';
     if (option480) option480.textContent = '480p';
 
-    if (isR2V && option720) resolution.value = '720p';
-    resolution.disabled = !!isR2V;
+    // R2V 恢复可选：官方支持 480p / 720p。
+    // 若当前路由拒绝显式 resolution，提交层会自动兼容重试。
+    resolution.disabled = false;
   }
 
   function syncTaskConstraints() {
@@ -376,23 +394,23 @@
 
     if (mode === 'reference') {
       if (hint) hint.textContent = isR2V
-        ? '参考生成：官方支持 480p / 720p，默认 720p；当前 R2V 兼容模式不显式下发 resolution，实际输出规格由服务端决定。宽高比和 4–30 秒时长可设置。'
+        ? '参考生成：官方支持 480p / 720p，默认 720p。可直接选择分辨率；若当前 R2V 路由拒绝该参数，系统会自动去掉 resolution 并重试一次。'
         : '参考生成：可自定义宽高比和 4–30 秒时长。';
     } else if (mode === 'auto') {
       if (ratio) ratio.value = 'adaptive';
       if (duration) duration.value = '-1';
       if (hint) hint.textContent = isR2V
-        ? '自动判断：按官方推荐使用 adaptive + -1；界面显示 720p（官方默认），R2V 请求不显式下发 resolution，实际输出规格由服务端决定。'
+        ? '自动判断：按官方推荐使用 adaptive + -1；分辨率仍可选 480p / 720p，若当前路由拒绝则自动兼容重试。'
         : '自动判断：按官方推荐使用 adaptive + -1。';
     } else if (mode === 'edit') {
       if (ratio) ratio.value = 'adaptive';
       if (duration) duration.value = '-1';
       if (format) format.value = 'mov';
-      if (hint) hint.textContent = '视频编辑：需参考视频；宽高比 adaptive、时长 -1；分辨率由服务端按任务约束处理。';
+      if (hint) hint.textContent = '视频编辑：需参考视频；宽高比 adaptive、时长 -1；分辨率按官方能力可选，若当前路由拒绝则自动兼容重试。';
     } else if (mode === 'extend') {
       if (ratio) ratio.value = 'adaptive';
       if (format) format.value = 'mov';
-      if (hint) hint.textContent = '视频延长：需参考视频；宽高比 adaptive；分辨率由服务端按任务约束处理。';
+      if (hint) hint.textContent = '视频延长：需参考视频；宽高比 adaptive；分辨率按官方能力可选，若当前路由拒绝则自动兼容重试。';
     }
   }
 
@@ -429,7 +447,7 @@
 
     if (selected) {
       const res = document.getElementById('vidResolution');
-      if (res && Array.from(res.options).some(o => o.value === '720p')) res.value = '720p';
+      if (res && !res.value && Array.from(res.options).some(o => o.value === '720p')) res.value = '720p';
       const dur = document.getElementById('vidDuration');
       if (dur) { dur.min = '-1'; dur.max = '30'; }
       syncTaskConstraints();
@@ -466,7 +484,7 @@
       document.getElementById(id)?.addEventListener('change', () => setTimeout(refreshUI, 50));
     });
 
-    if (typeof setVideoFormDisabled === 'function' && !setVideoFormDisabled.__seedance25v173) {
+    if (typeof setVideoFormDisabled === 'function' && !setVideoFormDisabled.__seedance25v174) {
       const originalDisable = setVideoFormDisabled;
       const wrappedDisable = function (disabled) {
         originalDisable(disabled);
@@ -476,7 +494,7 @@
         });
         if (!disabled) syncTaskConstraints();
       };
-      wrappedDisable.__seedance25v173 = true;
+      wrappedDisable.__seedance25v174 = true;
       setVideoFormDisabled = wrappedDisable;
     }
 
