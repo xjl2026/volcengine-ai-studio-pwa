@@ -1,10 +1,10 @@
-// Seedance 2.5 官方能力适配层 - v1.7.4
+// Seedance 2.5 官方能力适配层 - v1.7.5
 // 依据 2026-08-16 官方文档 + R2V 实际 API 返回校准。
 (function () {
   'use strict';
 
   const ID = 'doubao-seedance-2-5-260628';
-  const VERSION = '1.7.4';
+  const VERSION = '1.7.5';
 
   function getModel() {
     if (typeof VIDEO_MODELS === 'undefined') return null;
@@ -91,10 +91,6 @@
         const refMode = hasReferences(params);
         const taskMode = getTaskMode();
 
-        // 官方文档：Seedance 2.5 支持 480p / 720p，默认 720p。
-        // 正常情况下保留用户选择的 resolution。
-        // 若当前 R2V 路由实际拒绝该参数，submitVideoTask 会自动以 fallback 标记重试，
-        // 仅在重试请求中移除 resolution，避免用户手工改参数。
         if (params.__sd25ResolutionFallback && refMode && !frameMode) {
           delete body.resolution;
         }
@@ -187,26 +183,52 @@
     const preview = document.getElementById('vidRefVideoPreview');
     if (!preview || typeof vidRefVideoUrls === 'undefined') return;
     preview.innerHTML = '';
+
+    const max = getModel()?.caps?.maxRefVideos || 10;
+    if (!vidRefVideoUrls.length) return;
+
+    const summary = document.createElement('div');
+    summary.style.cssText = 'width:100%;padding:8px 10px;border-radius:8px;background:rgba(0,212,170,.10);border:1px solid rgba(0,212,170,.28);color:var(--accent);font-size:12px;font-weight:600;';
+    summary.textContent = '✓ 已加入 ' + vidRefVideoUrls.length + '/' + max + ' 个参考视频';
+    preview.appendChild(summary);
+
     vidRefVideoUrls.forEach((url, idx) => {
       const item = document.createElement('div');
       item.className = 'preview-item';
+      item.style.cssText = 'position:relative;width:100%;height:auto;min-height:58px;padding:9px 36px 9px 10px;border-radius:8px;overflow:hidden;border:1px solid var(--border-color);background:var(--bg-tertiary);';
+
       const inner = document.createElement('div');
-      inner.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,.15);flex-direction:column;gap:2px;';
+      inner.style.cssText = 'display:flex;align-items:center;width:100%;gap:9px;';
+
       const icon = document.createElement('span');
-      icon.textContent = '▶';
-      icon.style.cssText = 'font-size:18px;color:#6c5ce7;';
-      const txt = document.createElement('span');
-      txt.textContent = url.length > 40 ? url.slice(0, 37) + '...' : url;
-      txt.style.cssText = 'font-size:9px;color:var(--text-muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      icon.textContent = '✓';
+      icon.style.cssText = 'display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(0,212,170,.12);color:var(--accent);font-size:16px;font-weight:700;flex-shrink:0;';
+
+      const textWrap = document.createElement('div');
+      textWrap.style.cssText = 'min-width:0;flex:1;';
+
+      const title = document.createElement('div');
+      title.textContent = '参考视频 ' + (idx + 1) + ' · 已加入提交列表';
+      title.style.cssText = 'font-size:12px;color:var(--text-primary);font-weight:600;margin-bottom:2px;';
+
+      const txt = document.createElement('div');
+      txt.textContent = url;
+      txt.title = url;
+      txt.style.cssText = 'font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+
       const del = document.createElement('button');
       del.className = 'remove-btn';
       del.textContent = '×';
+      del.title = '移除参考视频';
       del.onclick = e => {
         e.stopPropagation();
         vidRefVideoUrls.splice(idx, 1);
         renderVideoRefs();
+        if (typeof showToast === 'function') showToast('已移除参考视频', 'info');
       };
-      inner.append(icon, txt);
+
+      textWrap.append(title, txt);
+      inner.append(icon, textWrap);
       item.append(inner, del);
       preview.appendChild(item);
     });
@@ -223,9 +245,19 @@
       if (!validateUrl(url)) return showToast('请粘贴有效的 http/https URL', 'error');
       if (vidRefVideoUrls.length >= max) return showToast('当前模型最多 ' + max + ' 个参考视频', 'warning');
       if (vidRefVideoUrls.includes(url)) return showToast('该 URL 已添加', 'warning');
+
       vidRefVideoUrls.push(url);
       input.value = '';
+      input.blur();
       renderVideoRefs();
+
+      if (typeof showToast === 'function') {
+        showToast('参考视频已加入提交列表（' + vidRefVideoUrls.length + '/' + max + '）', 'success');
+      }
+
+      const oldText = btn.textContent;
+      btn.textContent = '已添加 ✓';
+      setTimeout(() => { btn.textContent = oldText || '添加'; }, 1200);
     };
   }
 
@@ -368,8 +400,6 @@
     if (option720) option720.textContent = isR2V ? '720p（官方默认）' : '720p';
     if (option480) option480.textContent = '480p';
 
-    // R2V 恢复可选：官方支持 480p / 720p。
-    // 若当前路由拒绝显式 resolution，提交层会自动兼容重试。
     resolution.disabled = false;
   }
 
@@ -456,7 +486,7 @@
     const v = document.getElementById('versionText');
     if (v) v.textContent = 'v' + VERSION;
     const date = document.getElementById('versionDate');
-    if (date) date.textContent = '2026-08-16';
+    if (date) date.textContent = '2026-08-17';
   }
 
   function installUiHooks() {
