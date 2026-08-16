@@ -1,17 +1,17 @@
-// Seedance 2.5 官方能力适配层 - v1.7.1
-// 依据 2026-08-16 火山方舟《Doubao Seedance 2.5 教程 / 提示词指南》整理。
+// Seedance 2.5 官方能力适配层 - v1.7.2
+// 依据 2026-08-16 官方文档 + R2V 实际 API 返回校准。
 (function () {
   'use strict';
 
   const ID = 'doubao-seedance-2-5-260628';
-  const VERSION = '1.7.1';
+  const VERSION = '1.7.2';
 
   function getModel() {
     if (typeof VIDEO_MODELS === 'undefined') return null;
     return VIDEO_MODELS.find(m => m.id === ID) || null;
   }
 
-  function isSeedance25Selected() {
+  function isSelected() {
     return document.getElementById('vidModel')?.value === ID;
   }
 
@@ -81,7 +81,7 @@
   }
 
   function patchApiLayer() {
-    if (typeof buildVideoRequestBody === 'function' && !buildVideoRequestBody.__seedance25v171) {
+    if (typeof buildVideoRequestBody === 'function' && !buildVideoRequestBody.__seedance25v172) {
       const originalBuild = buildVideoRequestBody;
       const wrapped = function (params) {
         const body = originalBuild(params);
@@ -91,17 +91,16 @@
         const refMode = hasReferences(params);
         const taskMode = getTaskMode();
 
-        // Seedance 2.5 官方支持 480p / 720p；主请求显式携带所选分辨率。
-        if (params.resolution && params.resolution !== '默认') {
-          body.resolution = params.resolution;
+        // 2026-08-16 实际 R2V 接口会拒绝显式 resolution。
+        // R2V 省略该字段，服务端默认输出 720p；T2V/首尾帧沿用原请求逻辑。
+        if (refMode && !frameMode) {
+          delete body.resolution;
         }
 
         if (frameMode) {
-          // 首帧 / 首尾帧任务锁定首帧宽高比。
           body.ratio = 'adaptive';
           delete body.omni_reference_task_type;
         } else if (refMode) {
-          // “参考生成”是本地 UI 语义，不向 API 发送不存在的 reference 枚举。
           if (taskMode === 'reference') {
             delete body.omni_reference_task_type;
           } else if (taskMode === 'auto') {
@@ -123,11 +122,11 @@
         body.output_format = getOutputFormat();
         return body;
       };
-      wrapped.__seedance25v171 = true;
+      wrapped.__seedance25v172 = true;
       buildVideoRequestBody = wrapped;
     }
 
-    if (typeof submitVideoTask === 'function' && !submitVideoTask.__seedance25v171) {
+    if (typeof submitVideoTask === 'function' && !submitVideoTask.__seedance25v172) {
       const originalSubmit = submitVideoTask;
       const wrappedSubmit = async function (params) {
         if (params?.model === ID && !hasFrames(params)) {
@@ -144,26 +143,24 @@
         }
         return originalSubmit(params);
       };
-      wrappedSubmit.__seedance25v171 = true;
+      wrappedSubmit.__seedance25v172 = true;
       submitVideoTask = wrappedSubmit;
     }
   }
 
   function patchAppValidation() {
-    if (typeof validateVideoMedia !== 'function' || validateVideoMedia.__seedance25v171) return;
+    if (typeof validateVideoMedia !== 'function' || validateVideoMedia.__seedance25v172) return;
     const originalValidate = validateVideoMedia;
     const wrappedValidate = function (mode, mediaState, caps) {
       const result = originalValidate(mode, mediaState, caps);
       if (result?.valid) return result;
-
-      // 2.5 官方支持纯音频参考；旧校验只在该场景放行。
       const audioOnlyBlocked = result?.msg === '参考音频不能单独使用，请至少添加一张参考图或一个参考视频';
       if (audioOnlyBlocked && caps?.refAudioRequiresOther === false && mediaState?.refAudios?.length) {
         return { valid: true };
       }
       return result;
     };
-    wrappedValidate.__seedance25v171 = true;
+    wrappedValidate.__seedance25v172 = true;
     validateVideoMedia = wrappedValidate;
   }
 
@@ -174,7 +171,6 @@
     vidRefVideoUrls.forEach((url, idx) => {
       const item = document.createElement('div');
       item.className = 'preview-item';
-
       const inner = document.createElement('div');
       inner.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:rgba(108,92,231,.15);flex-direction:column;gap:2px;';
       const icon = document.createElement('span');
@@ -191,7 +187,6 @@
         vidRefVideoUrls.splice(idx, 1);
         renderVideoRefs();
       };
-
       inner.append(icon, txt);
       item.append(inner, del);
       preview.appendChild(item);
@@ -202,7 +197,6 @@
     const btn = document.getElementById('btnAddRefVideoUrl');
     const input = document.getElementById('vidRefVideoUrlInput');
     if (!btn || !input || typeof vidRefVideoUrls === 'undefined') return;
-
     btn.onclick = function () {
       const url = input.value.trim();
       const max = getModel()?.caps?.maxRefVideos || 10;
@@ -243,7 +237,6 @@
     let files = [];
     input.accept = '.wav,.mp3,audio/wav,audio/mpeg';
     area.onclick = () => input.click();
-
     input.onchange = async e => {
       const max = getModel()?.caps?.maxRefAudios || 10;
       for (const file of e.target.files) {
@@ -328,7 +321,6 @@
         format.style.display = 'none';
         format.innerHTML = '<label>输出格式 <span class="hint">2.5 专属</span></label>' +
           '<select id="vidOutputFormat"><option value="mp4">MP4</option><option value="mov">MOV（编辑/延长推荐）</option></select>';
-
         anchor.parentNode.insertBefore(task, anchor);
         anchor.parentNode.insertBefore(format, anchor);
       }
@@ -348,15 +340,18 @@
   }
 
   function syncTaskConstraints() {
-    if (!isSeedance25Selected()) return;
+    if (!isSelected()) return;
     const mode = getTaskMode();
     const ratio = document.getElementById('vidRatio');
     const duration = document.getElementById('vidDuration');
     const format = document.getElementById('vidOutputFormat');
+    const resolution = document.getElementById('vidResolution');
     const hint = document.getElementById('vidOmniTaskHint');
-
     const hasFrameInput = typeof vidFirstImage !== 'undefined' &&
       ((vidFirstImage && vidFirstImage.length) || (vidTailImage && vidTailImage.length));
+    const isR2V = typeof vidMode !== 'undefined' && vidMode === 'i2v' && !hasFrameInput;
+
+    if (resolution) resolution.disabled = !!isR2V;
 
     if (hasFrameInput) {
       if (ratio) ratio.value = 'adaptive';
@@ -365,20 +360,22 @@
     }
 
     if (mode === 'reference') {
-      if (hint) hint.textContent = '参考生成：可自定义宽高比和 4–30 秒时长；不会向 API 发送 reference 枚举。';
+      if (hint) hint.textContent = isR2V
+        ? '参考生成：R2V 当前接口不接受显式 resolution，自动使用服务端默认 720p；宽高比和 4–30 秒时长可设置。'
+        : '参考生成：可自定义宽高比和 4–30 秒时长。';
     } else if (mode === 'auto') {
       if (ratio) ratio.value = 'adaptive';
       if (duration) duration.value = '-1';
-      if (hint) hint.textContent = '自动判断：按官方推荐使用 adaptive + -1，减少任务类型约束报错。';
+      if (hint) hint.textContent = '自动判断：按官方推荐使用 adaptive + -1；R2V 分辨率使用服务端默认值。';
     } else if (mode === 'edit') {
       if (ratio) ratio.value = 'adaptive';
       if (duration) duration.value = '-1';
       if (format) format.value = 'mov';
-      if (hint) hint.textContent = '视频编辑：需参考视频；宽高比 adaptive、时长 -1；待编辑视频需 4–30 秒。';
+      if (hint) hint.textContent = '视频编辑：需参考视频；宽高比 adaptive、时长 -1；分辨率由服务端处理。';
     } else if (mode === 'extend') {
       if (ratio) ratio.value = 'adaptive';
       if (format) format.value = 'mov';
-      if (hint) hint.textContent = '视频延长：需参考视频；宽高比 adaptive；输出时长可设 4–30 秒或 -1。';
+      if (hint) hint.textContent = '视频延长：需参考视频；宽高比 adaptive；分辨率由服务端处理。';
     }
   }
 
@@ -386,8 +383,7 @@
     const m = getModel();
     if (!m) return;
     const caps = m.caps || {};
-    const selected = isSeedance25Selected();
-
+    const selected = isSelected();
     const modelOption = document.querySelector('#vidModel option[value="' + ID + '"]');
     if (modelOption) modelOption.textContent = 'Seedance 2.5';
 
@@ -453,7 +449,7 @@
       document.getElementById(id)?.addEventListener('change', () => setTimeout(refreshUI, 50));
     });
 
-    if (typeof setVideoFormDisabled === 'function' && !setVideoFormDisabled.__seedance25v171) {
+    if (typeof setVideoFormDisabled === 'function' && !setVideoFormDisabled.__seedance25v172) {
       const originalDisable = setVideoFormDisabled;
       const wrappedDisable = function (disabled) {
         originalDisable(disabled);
@@ -461,8 +457,9 @@
           const el = document.getElementById(id);
           if (el) el.disabled = disabled;
         });
+        if (!disabled) syncTaskConstraints();
       };
-      wrappedDisable.__seedance25v171 = true;
+      wrappedDisable.__seedance25v172 = true;
       setVideoFormDisabled = wrappedDisable;
     }
 
