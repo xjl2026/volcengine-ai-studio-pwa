@@ -32,6 +32,14 @@ jobs:
           sed -i "s|CACHE_NAME = '[^']*'|CACHE_NAME = '$CACHE_VER'|g" sw.js
           sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
 
+          # Seedance 2.5 适配层必须在 app.js 之后加载。
+          # 若源码 index.html 尚未显式引用，则在构建时自动注入；同时给脚本加本次构建版本，避免 iOS PWA 吃旧缓存。
+          if grep -q 'seedance25.js' index.html; then
+            sed -i "s|seedance25.js?v=[^\"]*|seedance25.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"seedance25.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
