@@ -1,7 +1,7 @@
 // Service Worker - 离线缓存
 // 每次构建替换 CACHE_NAME 以确保旧缓存被清除
-// BUILD_CACHE: volc-ai-1783929191
-const CACHE_NAME = 'volc-ai-1783929191';
+// v1.7.1 - Seedance 2.5 官方能力适配
+const CACHE_NAME = 'volc-ai-1.7.1-20260816';
 const CACHE_FILES = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const CACHE_FILES = [
   './api.js',
   './sync.js',
   './merge-cloud-history.js',
+  './seedance25.js',
   './app.js',
   './manifest.json'
 ];
