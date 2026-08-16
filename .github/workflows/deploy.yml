@@ -40,6 +40,13 @@ jobs:
             sed -i "s|</body>|  <script src=\"seedance25.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
+          # iOS/PWA 参考视频“添加”按钮使用独立捕获级热修复，必须在 seedance25.js 之后加载。
+          if grep -q 'seedance25-refvideo-hotfix.js' index.html; then
+            sed -i "s|seedance25-refvideo-hotfix.js?v=[^\"]*|seedance25-refvideo-hotfix.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"seedance25-refvideo-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
