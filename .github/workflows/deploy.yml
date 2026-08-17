@@ -54,11 +54,18 @@ jobs:
             sed -i "s|</body>|  <script src=\"video-task-background-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # pending 任务提示条直接提供“查询当前任务 / 放到后台继续”两个操作入口。
+          # pending 任务在生成按钮附近直接提供“查询当前任务 / 放到后台继续”两个操作入口。
           if grep -q 'video-task-pending-ui-hotfix.js' index.html; then
             sed -i "s|video-task-pending-ui-hotfix.js?v=[^\"]*|video-task-pending-ui-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"video-task-pending-ui-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
+          # 视频任务是服务端可恢复任务，允许在其运行期间刷新 PWA 更新。
+          if grep -q 'sw-update-video-safe-hotfix.js' index.html; then
+            sed -i "s|sw-update-video-safe-hotfix.js?v=[^\"]*|sw-update-video-safe-hotfix.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"sw-update-video-safe-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
       - name: Setup Pages
