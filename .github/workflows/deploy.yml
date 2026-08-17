@@ -32,60 +32,59 @@ jobs:
           sed -i "s|CACHE_NAME = '[^']*'|CACHE_NAME = '$CACHE_VER'|g" sw.js
           sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
 
-          # Seedance 2.5 适配层必须在 app.js 之后加载。
           if grep -q 'seedance25.js' index.html; then
             sed -i "s|seedance25.js?v=[^\"]*|seedance25.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"seedance25.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # iOS/PWA 参考视频“添加”按钮捕获级修复。
           if grep -q 'seedance25-refvideo-hotfix.js' index.html; then
             sed -i "s|seedance25-refvideo-hotfix.js?v=[^\"]*|seedance25-refvideo-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"seedance25-refvideo-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 视频长任务允许放到后台。
           if grep -q 'video-task-background-hotfix.js' index.html; then
             sed -i "s|video-task-background-hotfix.js?v=[^\"]*|video-task-background-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"video-task-background-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 当前 pending 任务在生成按钮附近直接提供查询/放后台入口。
           if grep -q 'video-task-pending-ui-hotfix.js' index.html; then
             sed -i "s|video-task-pending-ui-hotfix.js?v=[^\"]*|video-task-pending-ui-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"video-task-pending-ui-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 历史详情：有 taskId 且无结果的视频始终允许查询任务状态，并修正后台任务状态文案。
           if grep -q 'history-video-task-hotfix.js' index.html; then
             sed -i "s|history-video-task-hotfix.js?v=[^\"]*|history-video-task-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"history-video-task-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 视频任务是服务端可恢复任务，允许运行期间刷新 PWA 更新。
           if grep -q 'sw-update-video-safe-hotfix.js' index.html; then
             sed -i "s|sw-update-video-safe-hotfix.js?v=[^\"]*|sw-update-video-safe-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"sw-update-video-safe-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 设置页显示整个 PWA 的真实发布版本。
           if grep -q 'app-build-version.js' index.html; then
             sed -i "s|app-build-version.js?v=[^\"]*|app-build-version.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"app-build-version.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 设置页常驻“检查并同步最新版”按钮：主动注销旧 SW、清理 Cache Storage，再从网络重载；不清用户数据。
           if grep -q 'manual-update-control.js' index.html; then
             sed -i "s|manual-update-control.js?v=[^\"]*|manual-update-control.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"manual-update-control.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
+          # iOS standalone 紧急解锁：恢复 pointer/touch，清理由更新流程遗留的透明全屏阻挡层。
+          if grep -q 'emergency-touch-unlock.js' index.html; then
+            sed -i "s|emergency-touch-unlock.js?v=[^\"]*|emergency-touch-unlock.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"emergency-touch-unlock.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
       - name: Setup Pages
