@@ -47,6 +47,13 @@ jobs:
             sed -i "s|</body>|  <script src=\"seedance25-refvideo-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
+          # 视频长任务允许“放到后台继续新任务”，避免单个服务端任务长时间阻塞前端。
+          if grep -q 'video-task-background-hotfix.js' index.html; then
+            sed -i "s|video-task-background-hotfix.js?v=[^\"]*|video-task-background-hotfix.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"video-task-background-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
