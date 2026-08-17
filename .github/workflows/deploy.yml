@@ -32,6 +32,19 @@ jobs:
           sed -i "s|CACHE_NAME = '[^']*'|CACHE_NAME = '$CACHE_VER'|g" sw.js
           sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
 
+          # 修复导航初始化竞态：导航事件在异步启动前已绑定，但原选择模式变量要到后半段才声明。
+          # 若 initSync/恢复流程变慢，点击底栏会触发 TDZ 异常并把用户困在当前页。
+          # 构建时将这些导航状态提前到顶层，保证任何时刻都可切页。
+          sed -i '/^let isSelectMode = false;/d' app.js
+          sed -i '/^let selectedRecords = \[\];/d' app.js
+          sed -i '/^let playlistVideos = \[\];/d' app.js
+          sed -i '/^let playlistIndex = 0;/d' app.js
+          sed -i '/^let playlistVideoEl = null;/d' app.js
+          sed -i '/^let playlistVideoEl2 = null;/d' app.js
+          sed -i '/^let playlistActiveEl = null;/d' app.js
+          sed -i '/^let playlistPreloadedIdx = -1;/d' app.js
+          sed -i '/^const videoGenState = { isGenerating: false };/a\let isSelectMode = false;\nlet selectedRecords = [];\nlet playlistVideos = [];\nlet playlistIndex = 0;\nlet playlistVideoEl = null;\nlet playlistVideoEl2 = null;\nlet playlistActiveEl = null;\nlet playlistPreloadedIdx = -1;' app.js
+
           if grep -q 'seedance25.js' index.html; then
             sed -i "s|seedance25.js?v=[^\"]*|seedance25.js?v=$CACHE_VER|g" index.html
           else
