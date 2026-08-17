@@ -1,7 +1,7 @@
 // Service Worker - 离线缓存
 // 每次构建替换 CACHE_NAME 以确保旧缓存被清除
-// v1.7.5 - reference video add feedback + visible confirmation
-const CACHE_NAME = 'volc-ai-1.7.5-20260817';
+// v1.7.9 - emergency auto-activate to break old-version update deadlock
+const CACHE_NAME = 'volc-ai-1.7.9-20260817';
 const CACHE_FILES = [
   './',
   './index.html',
@@ -14,25 +14,29 @@ const CACHE_FILES = [
   './manifest.json'
 ];
 
-// install: 只缓存，不自动 skipWaiting（等待用户确认后再激活）
+// install: 本次自动激活新 SW，用于解开“旧版本因视频任务禁止更新”的死锁。
+// 视频生成任务已在服务端运行，taskId 保存在 localStorage，重新打开后可恢复查询。
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_FILES)).catch(err => console.warn('SW install failed:', err))
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(CACHE_FILES))
+      .catch(err => console.warn('SW install failed:', err))
+      .then(() => self.skipWaiting())
   );
-  // 不调用 self.skipWaiting()，等待消息触发
 });
 
-// activate: 清理旧缓存
+// activate: 清理旧缓存并立即接管页面。
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then(keys => Promise.all(
-      keys.filter(k => k.startsWith('volc-ai-') && k !== CACHE_NAME).map(k => caches.delete(k))
-    ))
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k.startsWith('volc-ai-') && k !== CACHE_NAME).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// 消息监听：用户确认后才 skipWaiting
+// 仍保留手动激活消息兼容旧前端。
 self.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
