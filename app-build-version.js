@@ -1,7 +1,7 @@
-// App build version display - v1.7.14
+// App build version display - v1.7.15
 (function () {
   'use strict';
-  const APP_DISPLAY_VERSION = '1.7.14';
+  const APP_DISPLAY_VERSION = '1.7.15';
 
   function applyVersion() {
     const el = document.getElementById('versionText');
