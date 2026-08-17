@@ -1,7 +1,7 @@
 // Service Worker - 离线缓存
 // 每次构建替换 CACHE_NAME 以确保旧缓存被清除
-// v1.7.10 - force active PWA clients onto latest build
-const CACHE_NAME = 'volc-ai-1.7.10-20260817';
+// v1.7.14 - recovery page + dynamic build marker
+const CACHE_NAME = 'volc-ai-1.7.14-20260817';
 const CACHE_FILES = [
   './',
   './index.html',
@@ -14,8 +14,6 @@ const CACHE_FILES = [
   './manifest.json'
 ];
 
-// 当前版本自动激活，用于解开旧版本“视频任务进行中，无法刷新”的更新死锁。
-// 视频任务已经提交到服务端，taskId 持久化在本地，页面重载后可继续恢复查询。
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE_NAME)
@@ -25,7 +23,6 @@ self.addEventListener('install', (e) => {
   );
 });
 
-// 激活后：清旧缓存、接管页面，并把仍停留在旧 UI 的窗口强制导航一次。
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
@@ -40,8 +37,8 @@ self.addEventListener('activate', (e) => {
       try {
         const url = new URL(client.url);
         if (url.origin !== self.location.origin) return;
-        // 增加一次性版本参数，绕开 iOS standalone/BFCache 对旧页面的恢复。
-        url.searchParams.set('__pwa_build', '1.7.10');
+        // 使用当前构建的 CACHE_NAME，而不是固定版本号，避免以后再次卡在旧版本参数。
+        url.searchParams.set('__pwa_build', CACHE_NAME);
         await client.navigate(url.href);
       } catch (err) {
         console.warn('Force client refresh failed:', err);
@@ -50,14 +47,13 @@ self.addEventListener('activate', (e) => {
   })());
 });
 
-// 仍保留手动激活消息兼容旧前端。
 self.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
 });
 
-// fetch: network-first
+// 同源 GET 请求 network-first；在线时优先拿最新文件，离线才回退缓存。
 self.addEventListener('fetch', (e) => {
   if (e.request.url.startsWith(self.location.origin) && e.request.method === 'GET') {
     e.respondWith(
