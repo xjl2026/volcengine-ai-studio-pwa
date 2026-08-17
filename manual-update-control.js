@@ -1,74 +1,67 @@
-// 设置页手动强制同步最新版 - v1.7.15
+// 设置页手动同步最新版 - v1.7.16
 (function () {
   'use strict';
 
-  const VERSION = '1.7.15';
+  const VERSION = '1.7.16';
   let updating = false;
 
   function toast(message, type) {
     try {
       if (typeof showToast === 'function') return showToast(message, type || 'info', 4000);
     } catch (_) {}
-    alert(message);
+    try { alert(message); } catch (_) {}
   }
 
   async function forceSyncLatest() {
     if (updating) return;
-
-    const ok = confirm(
-      '检查并同步最新版？\n\n' +
-      '会注销旧 Service Worker、清理本应用网页缓存并重新加载最新版。\n\n' +
-      '不会清除历史记录、提示词、任务 ID、API Key 或其他本地设置；已经提交到火山服务端的视频任务也不会被取消。'
-    );
-    if (!ok) return;
-
     updating = true;
+
     const btn = document.getElementById('btnForceSyncLatest');
     const detail = document.getElementById('forceSyncLatestStatus');
     if (btn) {
       btn.disabled = true;
-      btn.textContent = '正在同步最新版…';
+      btn.textContent = '正在检查最新版…';
     }
-    if (detail) detail.textContent = '正在注销旧版本并清理网页缓存…';
+    if (detail) detail.textContent = '正在检查网络与新版本…';
 
     try {
-      // 先要求现有 registration 主动检查一次；即便检查失败，后面仍会强制注销并重载。
+      // 先确认网络可访问最新版，不再先注销 SW，避免 iOS standalone 进入不可交互状态。
+      const probe = new URL('./index.html', window.location.href);
+      probe.searchParams.set('__force_update_probe', Date.now().toString());
+      const response = await fetch(probe.href, { cache: 'no-store' });
+      if (!response.ok) throw new Error('当前无法从网络获取最新版');
+
+      // 主动检查 Service Worker 更新；有 waiting 版本则先激活。
       if ('serviceWorker' in navigator) {
         try {
           const reg = await navigator.serviceWorker.getRegistration();
-          if (reg) await reg.update();
-          if (reg?.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          if (reg) {
+            await reg.update().catch(() => {});
+            if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          }
         } catch (_) {}
-
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map(reg => reg.unregister().catch(() => false)));
       }
 
+      // 只清本应用 Cache Storage，不清 localStorage / sessionStorage / IndexedDB。
       if ('caches' in window) {
-        const keys = await caches.keys();
-        await Promise.all(
-          keys.filter(key => key.startsWith('volc-ai-')).map(key => caches.delete(key).catch(() => false))
-        );
+        try {
+          const keys = await caches.keys();
+          await Promise.all(keys.filter(k => k.startsWith('volc-ai-')).map(k => caches.delete(k).catch(() => false)));
+        } catch (_) {}
       }
 
-      if (detail) detail.textContent = '旧缓存已清理，正在从网络加载最新版…';
+      if (detail) detail.textContent = '已找到最新版，正在重新加载…';
 
-      // 用唯一查询参数绕开 iOS standalone/BFCache；不清 localStorage / IndexedDB。
+      // 带唯一参数从网络重新进入；不注销当前 controller，降低 iOS standalone 锁死概率。
       const target = new URL('./', window.location.href);
       target.searchParams.delete('__pwa_build');
-      target.searchParams.set('__force_update', Date.now().toString());
+      target.searchParams.delete('__force_update');
+      target.searchParams.set('__manual_sync', Date.now().toString());
 
-      // 先做一次 no-store 网络探测，避免离线时把用户直接送进失败页。
-      try {
-        const probe = new URL('./index.html', window.location.href);
-        probe.searchParams.set('__force_update', Date.now().toString());
-        const response = await fetch(probe.href, { cache: 'no-store' });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-      } catch (e) {
-        throw new Error('当前无法从网络获取最新版，请检查网络后重试');
-      }
-
-      setTimeout(() => window.location.replace(target.href), 250);
+      setTimeout(() => {
+        try { window.location.href = target.href; }
+        catch (_) { window.location.reload(); }
+      }, 150);
     } catch (e) {
       updating = false;
       if (btn) {
@@ -97,7 +90,7 @@
 
     const status = document.createElement('div');
     status.id = 'forceSyncLatestStatus';
-    status.textContent = '遇到版本未刷新时，点这里强制从网络同步；不会删除历史记录。';
+    status.textContent = '主动检查并同步新版；不会删除历史记录和任务 ID。';
     status.style.cssText = 'margin-top:8px;color:var(--text-muted);font-size:11px;line-height:1.55;text-align:center;';
 
     box.append(btn, status);
@@ -106,6 +99,7 @@
 
   document.addEventListener('DOMContentLoaded', () => setTimeout(ensureButton, 50));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(ensureButton, 50); });
+  window.addEventListener('pageshow', () => { updating = false; setTimeout(ensureButton, 50); });
   setTimeout(ensureButton, 100);
   setTimeout(ensureButton, 500);
 
