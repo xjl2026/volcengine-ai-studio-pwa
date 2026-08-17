@@ -33,8 +33,6 @@ jobs:
           sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
 
           # 修复导航初始化竞态：导航事件在异步启动前已绑定，但原选择模式变量要到后半段才声明。
-          # 若 initSync/恢复流程变慢，点击底栏会触发 TDZ 异常并把用户困在当前页。
-          # 构建时将这些导航状态提前到顶层，保证任何时刻都可切页。
           sed -i '/^let isSelectMode = false;/d' app.js
           sed -i '/^let selectedRecords = \[\];/d' app.js
           sed -i '/^let playlistVideos = \[\];/d' app.js
@@ -93,11 +91,17 @@ jobs:
             sed -i "s|</body>|  <script src=\"manual-update-control.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # iOS standalone 紧急解锁：恢复 pointer/touch，清理由更新流程遗留的透明全屏阻挡层。
           if grep -q 'emergency-touch-unlock.js' index.html; then
             sed -i "s|emergency-touch-unlock.js?v=[^\"]*|emergency-touch-unlock.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"emergency-touch-unlock.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
+          # 最后一层独立导航兜底：iOS touch/click 直接切 section，不依赖 app.js 的异步状态。
+          if grep -q 'nav-rescue.js' index.html; then
+            sed -i "s|nav-rescue.js?v=[^\"]*|nav-rescue.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"nav-rescue.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
       - name: Setup Pages
