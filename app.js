@@ -1,7 +1,7 @@
 // 应用主逻辑 - PWA 移动版
 
 // 版本信息
-const APP_VERSION = '1.6.7';
+const APP_VERSION = '1.8.0';
 const APP_BUILD = '2026-07-13 15:20:00';
 
 let imgMode = 't2i';
@@ -25,6 +25,14 @@ window._restoringTask = false;
 // 统一按钮状态管理
 const imageGenState = { isGenerating: false };
 const videoGenState = { isGenerating: false };
+let isSelectMode = false;
+let selectedRecords = [];
+let playlistVideos = [];
+let playlistIndex = 0;
+let playlistVideoEl = null;
+let playlistVideoEl2 = null;
+let playlistActiveEl = null;
+let playlistPreloadedIdx = -1;
 
 function refreshGenerateButtonState() {
   // 图片按钮
@@ -45,18 +53,23 @@ function refreshGenerateButtonState() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
+  // UI、导航和本地事件先完整初始化；网络配置、云同步和任务恢复异步执行，绝不阻塞页面交互。
   initNav();
   initImagePage();
   initVideoPage();
   initSettingsPage();
   initSyncSettings();
-  await loadConfig();
-  await updateApiStatus();
-  // 初始化同步
-  await initSync();
-  // 恢复未完成的视频任务（页面重新加载时）
-  restorePendingVideoTask();
+
+  Promise.resolve().then(async () => {
+    await loadConfig();
+    await updateApiStatus();
+    await initSync();
+    restorePendingVideoTask();
+  }).catch(err => {
+    console.error('异步启动初始化失败:', err);
+    try { showToast('部分在线功能初始化失败，可继续使用本地页面', 'warning', 4000); } catch (_) {}
+  });
 // SW 更新保护
 let swUpdateState = {
   hasUpdate: false,
@@ -69,7 +82,6 @@ let swUpdateState = {
 function checkSafeToUpdate() {
   swUpdateState.pendingReasons = [];
   if (imageGenState.isGenerating) swUpdateState.pendingReasons.push('图片生成进行中');
-  if (window._currentPollingTaskId) swUpdateState.pendingReasons.push('视频任务进行中');
   if (window._migratingData) swUpdateState.pendingReasons.push('数据迁移进行中');
   if (window._syncWriting) swUpdateState.pendingReasons.push('同步写入进行中');
   swUpdateState.isSafeToUpdate = swUpdateState.pendingReasons.length === 0;
@@ -1702,11 +1714,11 @@ window.renderHistory = renderHistory;
 window.showHistoryPreview = showHistoryPreview;
 
 // ============ 选择模式 + 连续播放 变量声明 ============
-let isSelectMode = false;
+
 let selectedRecords = []; // 数组，按勾选顺序记录 id
-let playlistVideos = [];
-let playlistIndex = 0;
-let playlistVideoEl = null;
+
+
+
 let playlistVideoEl2 = null; // 第二个 video 元素，用于无缝切换
 let playlistActiveEl = null; // 当前正在播放的 video 元素
 let playlistPreloadedIdx = -1; // 正在预加载的索引

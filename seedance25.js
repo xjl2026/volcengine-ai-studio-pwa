@@ -482,9 +482,6 @@
       if (dur) { dur.min = '-1'; dur.max = '30'; }
       syncTaskConstraints();
     }
-
-    const v = document.getElementById('versionText');
-    if (v) v.textContent = 'v' + VERSION;
     const date = document.getElementById('versionDate');
     if (date) date.textContent = '2026-08-17';
   }
