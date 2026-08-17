@@ -54,6 +54,13 @@ jobs:
             sed -i "s|</body>|  <script src=\"video-task-background-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
+          # pending 任务提示条直接提供“查询当前任务 / 放到后台继续”两个操作入口。
+          if grep -q 'video-task-pending-ui-hotfix.js' index.html; then
+            sed -i "s|video-task-pending-ui-hotfix.js?v=[^\"]*|video-task-pending-ui-hotfix.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"video-task-pending-ui-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
