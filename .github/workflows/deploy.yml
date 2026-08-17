@@ -68,6 +68,13 @@ jobs:
             sed -i "s|</body>|  <script src=\"sw-update-video-safe-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
+          # 设置页显示整个 PWA 的真实发布版本，不再被 Seedance 适配层自己的版本号覆盖。
+          if grep -q 'app-build-version.js' index.html; then
+            sed -i "s|app-build-version.js?v=[^\"]*|app-build-version.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"app-build-version.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
