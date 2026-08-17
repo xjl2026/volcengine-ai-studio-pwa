@@ -23,85 +23,114 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Inject build version
+      - name: Build clean production site
         run: |
           BUILD_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
-          CACHE_VER="volc-ai-$(date +%s)"
-          echo "Build: $BUILD_TIME | Cache: $CACHE_VER"
-          sed -i "s|APP_BUILD = '[^']*'|APP_BUILD = '$BUILD_TIME'|g" app.js
-          sed -i "s|CACHE_NAME = '[^']*'|CACHE_NAME = '$CACHE_VER'|g" sw.js
-          sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
+          BUILD_ID="$(date +%s)"
+          export BUILD_TIME BUILD_ID
+          echo "Build: $BUILD_TIME | ID: $BUILD_ID"
 
-          # 修复导航初始化竞态：导航事件在异步启动前已绑定，但原选择模式变量要到后半段才声明。
-          sed -i '/^let isSelectMode = false;/d' app.js
-          sed -i '/^let selectedRecords = \[\];/d' app.js
-          sed -i '/^let playlistVideos = \[\];/d' app.js
-          sed -i '/^let playlistIndex = 0;/d' app.js
-          sed -i '/^let playlistVideoEl = null;/d' app.js
-          sed -i '/^let playlistVideoEl2 = null;/d' app.js
-          sed -i '/^let playlistActiveEl = null;/d' app.js
-          sed -i '/^let playlistPreloadedIdx = -1;/d' app.js
-          sed -i '/^const videoGenState = { isGenerating: false };/a\let isSelectMode = false;\nlet selectedRecords = [];\nlet playlistVideos = [];\nlet playlistIndex = 0;\nlet playlistVideoEl = null;\nlet playlistVideoEl2 = null;\nlet playlistActiveEl = null;\nlet playlistPreloadedIdx = -1;' app.js
+          rm -rf _site
+          mkdir -p _site
+          cp index.html style.css api.js sync.js merge-cloud-history.js app.js seedance25.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js manifest.json _site/
 
-          if grep -q 'seedance25.js' index.html; then
-            sed -i "s|seedance25.js?v=[^\"]*|seedance25.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"seedance25.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re
 
-          if grep -q 'seedance25-refvideo-hotfix.js' index.html; then
-            sed -i "s|seedance25-refvideo-hotfix.js?v=[^\"]*|seedance25-refvideo-hotfix.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"seedance25-refvideo-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+          site = Path('_site')
+          build_id = os.environ['BUILD_ID']
+          build_time = os.environ['BUILD_TIME']
 
-          if grep -q 'video-task-background-hotfix.js' index.html; then
-            sed -i "s|video-task-background-hotfix.js?v=[^\"]*|video-task-background-hotfix.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"video-task-background-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+          # app.js: UI/navigation initialize synchronously; cloud/API startup runs in background.
+          p = site / 'app.js'
+          s = p.read_text(encoding='utf-8')
+          s = re.sub(r"const APP_VERSION = '[^']*';", "const APP_VERSION = '1.8.0';", s, count=1)
+          for name in ['isSelectMode','selectedRecords','playlistVideos','playlistIndex','playlistVideoEl','playlistVideoEl2','playlistActiveEl','playlistPreloadedIdx']:
+              s = re.sub(rf'^let {name} = .*?;\s*$', '', s, flags=re.M)
+          state = """const videoGenState = { isGenerating: false };
+          let isSelectMode = false;
+          let selectedRecords = [];
+          let playlistVideos = [];
+          let playlistIndex = 0;
+          let playlistVideoEl = null;
+          let playlistVideoEl2 = null;
+          let playlistActiveEl = null;
+          let playlistPreloadedIdx = -1;"""
+          s, n = re.subn(r"const videoGenState = \{ isGenerating: false \};", state, s, count=1)
+          if n != 1: raise RuntimeError('videoGenState anchor missing')
+          old = """document.addEventListener('DOMContentLoaded', async () => {
+            initNav();
+            initImagePage();
+            initVideoPage();
+            initSettingsPage();
+            initSyncSettings();
+            await loadConfig();
+            await updateApiStatus();
+            // 初始化同步
+            await initSync();
+            // 恢复未完成的视频任务（页面重新加载时）
+            restorePendingVideoTask();
+          """
+          new = """document.addEventListener('DOMContentLoaded', () => {
+            // UI/navigation first. Network startup must never block page interaction.
+            initNav();
+            initImagePage();
+            initVideoPage();
+            initSettingsPage();
+            initSyncSettings();
 
-          if grep -q 'video-task-pending-ui-hotfix.js' index.html; then
-            sed -i "s|video-task-pending-ui-hotfix.js?v=[^\"]*|video-task-pending-ui-hotfix.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"video-task-pending-ui-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+            Promise.resolve().then(async () => {
+              await loadConfig();
+              await updateApiStatus();
+              await initSync();
+              restorePendingVideoTask();
+            }).catch(err => {
+              console.error('异步启动初始化失败:', err);
+              try { showToast('部分在线功能初始化失败，可继续使用本地页面', 'warning', 4000); } catch (_) {}
+            });
+          """
+          if old not in s: raise RuntimeError('startup block missing')
+          s = s.replace(old, new, 1)
+          s = s.replace("  if (window._currentPollingTaskId) swUpdateState.pendingReasons.push('视频任务进行中');\n", '')
+          s = re.sub(r"const APP_BUILD = '[^']*';", f"const APP_BUILD = '{build_time}';", s, count=1)
+          p.write_text(s, encoding='utf-8')
 
-          if grep -q 'history-video-task-hotfix.js' index.html; then
-            sed -i "s|history-video-task-hotfix.js?v=[^\"]*|history-video-task-hotfix.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"history-video-task-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+          # Seedance adapter version is not the whole app version.
+          p = site / 'seedance25.js'
+          s = p.read_text(encoding='utf-8')
+          s = re.sub(r"\n\s*const v = document\.getElementById\('versionText'\);\n\s*if \(v\) v\.textContent = 'v' \+ VERSION;", '', s, count=1)
+          p.write_text(s, encoding='utf-8')
 
-          if grep -q 'sw-update-video-safe-hotfix.js' index.html; then
-            sed -i "s|sw-update-video-safe-hotfix.js?v=[^\"]*|sw-update-video-safe-hotfix.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"sw-update-video-safe-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+          # Explicit runtime list. No build-time hotfix injection.
+          p = site / 'index.html'
+          s = p.read_text(encoding='utf-8')
+          s = re.sub(r'<link rel="stylesheet" href="style\.css(?:\?[^\"]*)?">', f'<link rel="stylesheet" href="style.css?v={build_id}">', s, count=1)
+          s = re.sub(r'<span id="versionText">[^<]*</span>', '<span id="versionText">v1.8.0</span>', s, count=1)
+          s = re.sub(r'<span id="versionDate">[^<]*</span>', f'<span id="versionDate">{build_time}</span>', s, count=1)
+          scripts = f'''  <script src="api.js?v={build_id}"></script>\n  <script src="sync.js?v={build_id}"></script>\n  <script src="merge-cloud-history.js?v={build_id}"></script>\n  <script src="app.js?v={build_id}"></script>\n  <script src="seedance25.js?v={build_id}"></script>\n  <script src="seedance25-refvideo-hotfix.js?v={build_id}"></script>\n  <script src="video-task-manager.js?v={build_id}"></script>\n  <script src="pwa-update.js?v={build_id}"></script>\n'''
+          start = s.find('  <script src="api.js')
+          end = s.find('</body>', start)
+          if start < 0 or end < 0: raise RuntimeError('index script block missing')
+          s = s[:start] + scripts + s[end:]
+          p.write_text(s, encoding='utf-8')
 
-          if grep -q 'app-build-version.js' index.html; then
-            sed -i "s|app-build-version.js?v=[^\"]*|app-build-version.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"app-build-version.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
+          # Stamp one build id into the clean SW.
+          p = site / 'sw.js'
+          s = p.read_text(encoding='utf-8').replace('__BUILD_ID__', build_id)
+          p.write_text(s, encoding='utf-8')
+          PY
 
-          if grep -q 'manual-update-control.js' index.html; then
-            sed -i "s|manual-update-control.js?v=[^\"]*|manual-update-control.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"manual-update-control.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
-
-          if grep -q 'emergency-touch-unlock.js' index.html; then
-            sed -i "s|emergency-touch-unlock.js?v=[^\"]*|emergency-touch-unlock.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"emergency-touch-unlock.js?v=$CACHE_VER\"></script>\n</body>|" index.html
-          fi
-
-          # 最后一层独立导航兜底：iOS touch/click 直接切 section，不依赖 app.js 的异步状态。
-          if grep -q 'nav-rescue.js' index.html; then
-            sed -i "s|nav-rescue.js?v=[^\"]*|nav-rescue.js?v=$CACHE_VER|g" index.html
-          else
-            sed -i "s|</body>|  <script src=\"nav-rescue.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+      - name: Validate production runtime
+        run: |
+          for f in api.js sync.js merge-cloud-history.js app.js seedance25.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js; do
+            node --check "_site/$f"
+          done
+          echo "Runtime scripts:"
+          grep -o '<script[^>]*src="[^"]*"' _site/index.html
+          if grep -Eq 'nav-rescue|emergency-touch-unlock|manual-update-control|sw-update-video-safe-hotfix|video-task-background-hotfix|video-task-pending-ui-hotfix|history-video-task-hotfix' _site/index.html; then
+            echo "Obsolete hotfix leaked into production" >&2
+            exit 1
           fi
 
       - name: Setup Pages
@@ -110,7 +139,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: '_site'
 
       - name: Deploy to GitHub Pages
         id: deployment
