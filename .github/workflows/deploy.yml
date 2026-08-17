@@ -81,6 +81,13 @@ jobs:
             sed -i "s|</body>|  <script src=\"app-build-version.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
+          # 设置页常驻“检查并同步最新版”按钮：主动注销旧 SW、清理 Cache Storage，再从网络重载；不清用户数据。
+          if grep -q 'manual-update-control.js' index.html; then
+            sed -i "s|manual-update-control.js?v=[^\"]*|manual-update-control.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"manual-update-control.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
