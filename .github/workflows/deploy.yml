@@ -33,42 +33,48 @@ jobs:
           sed -i "s|<span id=\"versionDate\">[^<]*</span>|<span id=\"versionDate\">$BUILD_TIME</span>|g" index.html
 
           # Seedance 2.5 适配层必须在 app.js 之后加载。
-          # 若源码 index.html 尚未显式引用，则在构建时自动注入；同时给脚本加本次构建版本，避免 iOS PWA 吃旧缓存。
           if grep -q 'seedance25.js' index.html; then
             sed -i "s|seedance25.js?v=[^\"]*|seedance25.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"seedance25.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # iOS/PWA 参考视频“添加”按钮使用独立捕获级热修复，必须在 seedance25.js 之后加载。
+          # iOS/PWA 参考视频“添加”按钮捕获级修复。
           if grep -q 'seedance25-refvideo-hotfix.js' index.html; then
             sed -i "s|seedance25-refvideo-hotfix.js?v=[^\"]*|seedance25-refvideo-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"seedance25-refvideo-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 视频长任务允许“放到后台继续新任务”，避免单个服务端任务长时间阻塞前端。
+          # 视频长任务允许放到后台。
           if grep -q 'video-task-background-hotfix.js' index.html; then
             sed -i "s|video-task-background-hotfix.js?v=[^\"]*|video-task-background-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"video-task-background-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # pending 任务在生成按钮附近直接提供“查询当前任务 / 放到后台继续”两个操作入口。
+          # 当前 pending 任务在生成按钮附近直接提供查询/放后台入口。
           if grep -q 'video-task-pending-ui-hotfix.js' index.html; then
             sed -i "s|video-task-pending-ui-hotfix.js?v=[^\"]*|video-task-pending-ui-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"video-task-pending-ui-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 视频任务是服务端可恢复任务，允许在其运行期间刷新 PWA 更新。
+          # 历史详情：有 taskId 且无结果的视频始终允许查询任务状态，并修正后台任务状态文案。
+          if grep -q 'history-video-task-hotfix.js' index.html; then
+            sed -i "s|history-video-task-hotfix.js?v=[^\"]*|history-video-task-hotfix.js?v=$CACHE_VER|g" index.html
+          else
+            sed -i "s|</body>|  <script src=\"history-video-task-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
+          fi
+
+          # 视频任务是服务端可恢复任务，允许运行期间刷新 PWA 更新。
           if grep -q 'sw-update-video-safe-hotfix.js' index.html; then
             sed -i "s|sw-update-video-safe-hotfix.js?v=[^\"]*|sw-update-video-safe-hotfix.js?v=$CACHE_VER|g" index.html
           else
             sed -i "s|</body>|  <script src=\"sw-update-video-safe-hotfix.js?v=$CACHE_VER\"></script>\n</body>|" index.html
           fi
 
-          # 设置页显示整个 PWA 的真实发布版本，不再被 Seedance 适配层自己的版本号覆盖。
+          # 设置页显示整个 PWA 的真实发布版本。
           if grep -q 'app-build-version.js' index.html; then
             sed -i "s|app-build-version.js?v=[^\"]*|app-build-version.js?v=$CACHE_VER|g" index.html
           else
