@@ -1,9 +1,9 @@
-// 待处理视频任务直接操作 - v1.7.11
+// 待处理视频任务直接操作 - v1.7.12
 // 不依赖 app.js 内部作用域：直接读取持久化 pending task，并提供查询/放后台入口。
 (function () {
   'use strict';
 
-  const VERSION = '1.7.11';
+  const VERSION = '1.7.12';
   const STORAGE_KEY = 'volc_pending_task';
 
   function parseTask(raw) {
@@ -50,6 +50,9 @@
   }
 
   function releaseUi() {
+    // 关键：handleVideoGenerate 的首个门闩就是 videoGenState.isGenerating。
+    // 旧任务放后台后必须显式释放，否则新任务会静默 return。
+    try { videoGenState.isGenerating = false; } catch (_) {}
     window._restoringTask = false;
     window._currentPollingTaskId = null;
 
@@ -85,8 +88,8 @@
     if (typeof Store === 'undefined') return;
     const record = await findRecord(task.taskId);
     const patch = status === 'succeeded'
-      ? { status: 'succeeded', result: videoUrl ? [videoUrl] : [], thumbnail: videoUrl || null, lastFrame: lastFrameUrl || null }
-      : { status: 'failed', result: [] };
+      ? { status: 'succeeded', result: videoUrl ? [videoUrl] : [], thumbnail: videoUrl || null, lastFrame: lastFrameUrl || null, backgrounded: false }
+      : { status: 'failed', result: [], backgrounded: false };
     if (record?.id) await Store.updateHistory(record.id, patch);
     window._historyRendered = false;
   }
@@ -168,7 +171,12 @@
     window._videoDetachedTaskIds.add(String(taskId));
 
     const record = await findRecord(taskId);
-    try { if (record?.id && typeof Store !== 'undefined') await Store.updateHistory(record.id, { status: 'timeout' }); } catch (_) {}
+    try {
+      // 后台任务仍可能在服务端运行，不再写 timeout/过期；保留 pending 并标记 backgrounded。
+      if (record?.id && typeof Store !== 'undefined') {
+        await Store.updateHistory(record.id, { status: 'pending', backgrounded: true });
+      }
+    } catch (_) {}
 
     clearPendingIfSame(taskId);
     releaseUi();
