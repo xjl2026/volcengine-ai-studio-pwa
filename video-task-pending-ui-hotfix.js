@@ -1,9 +1,9 @@
-// 待处理视频任务提示条直接操作 - v1.7.7
+// 待处理视频任务直接操作 - v1.7.8
+// 只要本地存在 pending task，就在“生成视频”按钮上方固定显示查询/放后台入口。
 (function () {
   'use strict';
 
-  const VERSION = '1.7.7';
-  const NOTICE_TEXT = '已有未完成的视频任务，请先查询该任务结果';
+  const VERSION = '1.7.8';
 
   function getPending() {
     try {
@@ -35,11 +35,16 @@
     }
   }
 
+  function removeControls() {
+    const c = document.getElementById('pendingTaskDirectControls');
+    if (c) c.remove();
+  }
+
   async function queryPendingOnce() {
     const pending = getPending();
     if (!pending?.taskId) {
       showToast('当前没有待查询的视频任务', 'info');
-      enhanceNotice();
+      removeControls();
       return;
     }
 
@@ -105,7 +110,10 @@
         return;
       }
 
-      showToast(status === 'running' ? '服务端仍在生成中' : '服务端仍在排队中', 'warning', 4000);
+      const label = status === 'running' ? '服务端仍在生成中' : '服务端仍在排队中';
+      showToast(label, 'warning', 4000);
+      const statusText = document.getElementById('pendingTaskStatusText');
+      if (statusText) statusText.textContent = label + ' · 可继续等待，也可放到后台';
     } catch (e) {
       showToast('查询异常：' + (e?.message || '网络错误'), 'error');
     } finally {
@@ -150,34 +158,22 @@
     showToast('已放到后台，可以继续生成下一条', 'success', 4000);
   }
 
-  function removeControls() {
-    const c = document.getElementById('pendingTaskDirectControls');
-    if (c) c.remove();
-  }
+  function createControls(taskId) {
+    const box = document.createElement('div');
+    box.id = 'pendingTaskDirectControls';
+    box.style.cssText = 'width:100%;box-sizing:border-box;margin:12px 0 14px;padding:12px;border-radius:12px;background:rgba(255,180,67,.10);border:1px solid rgba(255,180,67,.45);';
 
-  function findNoticeLeaf() {
-    const root = document.getElementById('page-video') || document.body;
-    const all = root.querySelectorAll('*');
-    for (const el of all) {
-      if (el.children.length === 0 && String(el.textContent || '').trim().includes(NOTICE_TEXT)) return el;
-    }
-    return null;
-  }
+    const title = document.createElement('div');
+    title.textContent = '有一个未完成的视频任务';
+    title.style.cssText = 'font-size:14px;font-weight:700;color:#ffb443;margin-bottom:4px;';
 
-  function enhanceNotice() {
-    const pending = getPending();
-    if (!pending?.taskId) {
-      removeControls();
-      return;
-    }
-    if (document.getElementById('pendingTaskDirectControls')) return;
+    const status = document.createElement('div');
+    status.id = 'pendingTaskStatusText';
+    status.textContent = '任务ID：' + String(taskId).slice(0, 18) + '…';
+    status.style.cssText = 'font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:10px;';
 
-    const leaf = findNoticeLeaf();
-    if (!leaf) return;
-
-    const controls = document.createElement('div');
-    controls.id = 'pendingTaskDirectControls';
-    controls.style.cssText = 'display:flex;gap:8px;margin-top:8px;width:100%;';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;width:100%;';
 
     const queryBtn = document.createElement('button');
     queryBtn.id = 'btnPendingQueryNow';
@@ -190,20 +186,38 @@
     detachBtn.id = 'btnPendingDetachNow';
     detachBtn.type = 'button';
     detachBtn.textContent = '放到后台继续';
-    detachBtn.style.cssText = 'flex:1;padding:11px 8px;border:1px solid rgba(255,180,67,.55);border-radius:10px;background:rgba(255,180,67,.10);color:#ffb443;font-weight:700;font-size:14px;';
+    detachBtn.style.cssText = 'flex:1;padding:11px 8px;border:1px solid rgba(255,180,67,.55);border-radius:10px;background:rgba(255,180,67,.08);color:#ffb443;font-weight:700;font-size:14px;';
     detachBtn.onclick = detachPending;
 
-    controls.append(queryBtn, detachBtn);
-
-    const anchor = leaf.closest('.form-group') || leaf.parentElement || leaf;
-    anchor.insertAdjacentElement('afterend', controls);
+    row.append(queryBtn, detachBtn);
+    box.append(title, status, row);
+    return box;
   }
 
-  const observer = new MutationObserver(() => enhanceNotice());
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-  document.addEventListener('DOMContentLoaded', () => setTimeout(enhanceNotice, 200));
-  setTimeout(enhanceNotice, 300);
-  setInterval(enhanceNotice, 1500);
+  function ensureControls() {
+    const pending = getPending();
+    if (!pending?.taskId) {
+      removeControls();
+      return;
+    }
+
+    const existing = document.getElementById('pendingTaskDirectControls');
+    if (existing) return;
+
+    const genBtn = document.getElementById('btnGenVideo');
+    if (!genBtn) return;
+
+    const controls = createControls(pending.taskId);
+    genBtn.insertAdjacentElement('beforebegin', controls);
+  }
+
+  // DOM 改动、切页、Toast 出现都不影响：只按 pending task 是否存在决定是否显示固定操作卡。
+  const observer = new MutationObserver(() => ensureControls());
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', () => setTimeout(ensureControls, 200));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(ensureControls, 100); });
+  setTimeout(ensureControls, 300);
+  setInterval(ensureControls, 1200);
 
   window.queryPendingVideoTaskOnce = queryPendingOnce;
   window.detachPendingVideoTask = detachPending;
