@@ -1,33 +1,69 @@
-// 待处理视频任务直接操作 - v1.7.8
-// 只要本地存在 pending task，就在“生成视频”按钮上方固定显示查询/放后台入口。
+// 待处理视频任务直接操作 - v1.7.11
+// 不依赖 app.js 内部作用域：直接读取持久化 pending task，并提供查询/放后台入口。
 (function () {
   'use strict';
 
-  const VERSION = '1.7.8';
+  const VERSION = '1.7.11';
+  const STORAGE_KEY = 'volc_pending_task';
 
-  function getPending() {
+  function parseTask(raw) {
+    if (!raw) return null;
     try {
-      return typeof getValidPendingVideoTask === 'function' ? getValidPendingVideoTask() : null;
+      const task = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!task || !task.taskId) return null;
+      const savedAt = Number(task.savedAt || 0);
+      if (savedAt && Date.now() - savedAt > 48 * 3600 * 1000) return null;
+      return task;
     } catch (_) {
       return null;
     }
+  }
+
+  function getPending() {
+    const tasks = [];
+    try { const t = parseTask(localStorage.getItem(STORAGE_KEY)); if (t) tasks.push(t); } catch (_) {}
+    try { const t = parseTask(sessionStorage.getItem(STORAGE_KEY)); if (t) tasks.push(t); } catch (_) {}
+    try { const t = parseTask(window._volatilePendingVideoTask); if (t) tasks.push(t); } catch (_) {}
+    if (!tasks.length) return null;
+    tasks.sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+    return tasks[0];
+  }
+
+  function clearPendingIfSame(taskId) {
+    const same = value => {
+      const t = parseTask(value);
+      return t && String(t.taskId) === String(taskId);
+    };
+    try { if (same(localStorage.getItem(STORAGE_KEY))) localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    try { if (same(sessionStorage.getItem(STORAGE_KEY))) sessionStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    try { if (same(window._volatilePendingVideoTask)) window._volatilePendingVideoTask = null; } catch (_) {}
   }
 
   async function findRecord(taskId) {
     if (typeof Store === 'undefined' || !taskId) return null;
     try {
       const history = await Store.getHistory();
-      return Array.isArray(history) ? history.find(r => r && r.taskId === taskId) || null : null;
+      return Array.isArray(history) ? history.find(r => r && String(r.taskId) === String(taskId)) || null : null;
     } catch (_) {
       return null;
     }
   }
 
   function releaseUi() {
-    try { videoGenState.isGenerating = false; } catch (_) {}
     window._restoringTask = false;
     window._currentPollingTaskId = null;
-    try { setVideoFormDisabled(false); } catch (_) {}
+
+    const ids = [
+      'vidModel','vidResolution','vidRatio','vidDuration','vidSeed','vidFrames','vidServiceTier','vidPriority',
+      'vidGenerateAudio','vidWatermark','vidReturnLastFrame','vidCameraFixed','vidDraft','vidWebSearch',
+      'vidOmniTaskType','vidOutputFormat'
+    ];
+    ids.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
+    document.querySelectorAll('.mode-tab[data-vid-mode]').forEach(t => {
+      t.style.pointerEvents = '';
+      t.style.opacity = '';
+    });
+
     const btn = document.getElementById('btnGenVideo');
     if (btn) {
       btn.disabled = false;
@@ -36,14 +72,29 @@
   }
 
   function removeControls() {
-    const c = document.getElementById('pendingTaskDirectControls');
-    if (c) c.remove();
+    document.getElementById('pendingTaskDirectControls')?.remove();
+  }
+
+  function renderRecoveredVideo(url) {
+    const panel = document.getElementById('vidResultPanel');
+    if (!panel || !url) return;
+    panel.innerHTML = '<div class="result-content"><div class="result-item"><video src="' + String(url).replace(/"/g, '&quot;') + '" controls playsinline style="width:100%;border-radius:10px;"></video><div class="result-actions"><a class="btn-secondary" href="' + String(url).replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">打开视频</a></div></div></div>';
+  }
+
+  async function saveTerminal(task, status, videoUrl, lastFrameUrl) {
+    if (typeof Store === 'undefined') return;
+    const record = await findRecord(task.taskId);
+    const patch = status === 'succeeded'
+      ? { status: 'succeeded', result: videoUrl ? [videoUrl] : [], thumbnail: videoUrl || null, lastFrame: lastFrameUrl || null }
+      : { status: 'failed', result: [] };
+    if (record?.id) await Store.updateHistory(record.id, patch);
+    window._historyRendered = false;
   }
 
   async function queryPendingOnce() {
     const pending = getPending();
     if (!pending?.taskId) {
-      showToast('当前没有待查询的视频任务', 'info');
+      if (typeof showToast === 'function') showToast('当前没有待查询的视频任务', 'info');
       removeControls();
       return;
     }
@@ -52,70 +103,45 @@
     if (q) { q.disabled = true; q.textContent = '查询中...'; }
 
     try {
+      if (typeof queryVideoTask !== 'function') throw new Error('查询接口未加载');
       const result = await queryVideoTask(pending.taskId);
       if (!result?.success) {
-        showToast('查询失败：' + (result?.error || '未知错误'), 'error');
+        if (typeof showToast === 'function') showToast('查询失败：' + (result?.error || '未知错误'), 'error');
         return;
       }
 
       const status = result.data?.status || 'queued';
-      const record = await findRecord(pending.taskId);
-
       if (status === 'succeeded') {
         const url = result.data?.content?.video_url;
         const lf = result.data?.content?.last_frame_url;
         if (!url) {
-          showToast('任务已完成，但没有返回视频URL', 'warning');
+          if (typeof showToast === 'function') showToast('任务已完成，但没有返回视频URL', 'warning');
           return;
         }
-        if (typeof persistVideoTerminalState === 'function') {
-          await persistVideoTerminalState({
-            taskId: pending.taskId,
-            recordId: pending.recordId || record?.id || null,
-            vidMode: pending.vidMode || 'i2v',
-            prompt: pending.prompt || record?.prompt || '',
-            params: pending.params || record?.params || {},
-            status: 'succeeded',
-            videoUrl: url,
-            lastFrameUrl: lf
-          });
-        }
-        try { clearPendingVideoTask(); } catch (_) {}
+        await saveTerminal(pending, 'succeeded', url, lf);
+        clearPendingIfSame(pending.taskId);
         releaseUi();
-        if (typeof renderVideoResult === 'function') renderVideoResult(url, lf);
-        window._historyRendered = false;
-        showToast('任务已完成，视频已取回', 'success', 4000);
+        renderRecoveredVideo(url);
         removeControls();
+        if (typeof showToast === 'function') showToast('任务已完成，视频已取回', 'success', 4000);
         return;
       }
 
       if (status === 'failed') {
-        if (typeof persistVideoTerminalState === 'function') {
-          await persistVideoTerminalState({
-            taskId: pending.taskId,
-            recordId: pending.recordId || record?.id || null,
-            vidMode: pending.vidMode || 'i2v',
-            prompt: pending.prompt || record?.prompt || '',
-            params: pending.params || record?.params || {},
-            status: 'failed',
-            videoUrl: null,
-            lastFrameUrl: null
-          });
-        }
-        try { clearPendingVideoTask(); } catch (_) {}
+        await saveTerminal(pending, 'failed');
+        clearPendingIfSame(pending.taskId);
         releaseUi();
-        window._historyRendered = false;
-        showToast('服务端任务已失败，已释放新任务', 'error', 4000);
         removeControls();
+        if (typeof showToast === 'function') showToast('服务端任务已失败，已释放新任务', 'error', 4000);
         return;
       }
 
       const label = status === 'running' ? '服务端仍在生成中' : '服务端仍在排队中';
-      showToast(label, 'warning', 4000);
       const statusText = document.getElementById('pendingTaskStatusText');
       if (statusText) statusText.textContent = label + ' · 可继续等待，也可放到后台';
+      if (typeof showToast === 'function') showToast(label, 'warning', 4000);
     } catch (e) {
-      showToast('查询异常：' + (e?.message || '网络错误'), 'error');
+      if (typeof showToast === 'function') showToast('查询异常：' + (e?.message || '网络错误'), 'error');
     } finally {
       if (q && document.body.contains(q)) { q.disabled = false; q.textContent = '查询当前任务'; }
     }
@@ -125,37 +151,35 @@
     const pending = getPending();
     const taskId = pending?.taskId || window._currentPollingTaskId;
     if (!taskId) {
-      showToast('当前没有可释放的视频任务', 'info');
+      if (typeof showToast === 'function') showToast('当前没有可释放的视频任务', 'info');
       removeControls();
       return;
     }
 
     const ok = confirm(
       '把当前任务放到后台？\n\n' +
-      '这只停止本机继续等待并释放“生成视频”按钮，不会取消火山服务端任务，也不会重新提交。\n\n' +
+      '这只停止本机持续查询并释放“生成视频”按钮，不会取消火山服务端任务，也不会重新提交。\n\n' +
       '任务ID和历史记录会保留，之后仍可查询。'
     );
     if (!ok) return;
 
-    try {
-      if (window._videoDetachedTaskIds) window._videoDetachedTaskIds.add(String(taskId));
-    } catch (_) {}
+    // 让 background hotfix 已包装的 pollVideoTask 永久停住旧任务，避免它以后误清理新任务。
+    window._videoDetachedTaskIds = window._videoDetachedTaskIds || new Set();
+    window._videoDetachedTaskIds.add(String(taskId));
 
     const record = await findRecord(taskId);
-    try {
-      if (record?.id && typeof Store !== 'undefined') await Store.updateHistory(record.id, { status: 'timeout' });
-    } catch (_) {}
+    try { if (record?.id && typeof Store !== 'undefined') await Store.updateHistory(record.id, { status: 'timeout' }); } catch (_) {}
 
-    try { clearPendingVideoTask(); } catch (_) {}
+    clearPendingIfSame(taskId);
     releaseUi();
-    window._historyRendered = false;
     removeControls();
 
     const panel = document.getElementById('vidResultPanel');
     if (panel) {
-      panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ffb443">任务已放到后台</div><div class="status-detail">服务端仍可能继续生成，现在可以直接提交下一条。<br>之后可到历史记录查询原任务。</div></div>';
+      panel.innerHTML = '<div class="task-status"><div class="status-text" style="color:#ffb443">任务已放到后台</div><div class="status-detail" style="line-height:1.6">服务端仍可能继续生成，现在可以直接提交下一条。<br>之后可到历史记录查询原任务。</div></div>';
     }
-    showToast('已放到后台，可以继续生成下一条', 'success', 4000);
+    window._historyRendered = false;
+    if (typeof showToast === 'function') showToast('已放到后台，可以继续生成下一条', 'success', 4000);
   }
 
   function createControls(taskId) {
@@ -169,7 +193,7 @@
 
     const status = document.createElement('div');
     status.id = 'pendingTaskStatusText';
-    status.textContent = '任务ID：' + String(taskId).slice(0, 18) + '…';
+    status.textContent = '可以先查询结果，也可以放到后台继续新任务';
     status.style.cssText = 'font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:10px;';
 
     const row = document.createElement('div');
@@ -200,24 +224,19 @@
       removeControls();
       return;
     }
-
-    const existing = document.getElementById('pendingTaskDirectControls');
-    if (existing) return;
-
+    if (document.getElementById('pendingTaskDirectControls')) return;
     const genBtn = document.getElementById('btnGenVideo');
     if (!genBtn) return;
-
-    const controls = createControls(pending.taskId);
-    genBtn.insertAdjacentElement('beforebegin', controls);
+    genBtn.insertAdjacentElement('beforebegin', createControls(pending.taskId));
   }
 
-  // DOM 改动、切页、Toast 出现都不影响：只按 pending task 是否存在决定是否显示固定操作卡。
   const observer = new MutationObserver(() => ensureControls());
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  document.addEventListener('DOMContentLoaded', () => setTimeout(ensureControls, 200));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(ensureControls, 100); });
-  setTimeout(ensureControls, 300);
-  setInterval(ensureControls, 1200);
+  document.addEventListener('DOMContentLoaded', () => setTimeout(ensureControls, 100));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(ensureControls, 50); });
+  setTimeout(ensureControls, 100);
+  setTimeout(ensureControls, 500);
+  setInterval(ensureControls, 1000);
 
   window.queryPendingVideoTaskOnce = queryPendingOnce;
   window.detachPendingVideoTask = detachPending;
