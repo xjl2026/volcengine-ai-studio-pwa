@@ -1,10 +1,10 @@
-// Seedance 2.5 官方能力适配层 - v1.7.5
-// 依据 2026-08-16 官方文档 + R2V 实际 API 返回校准。
+// Seedance 2.5 官方能力适配层 - v1.7.6
+// 依据 2026-08-21 官方文档 + R2V 实际 API 返回校准。
 (function () {
   'use strict';
 
   const ID = 'doubao-seedance-2-5-260628';
-  const VERSION = '1.7.5';
+  const VERSION = '1.7.6';
 
   function getModel() {
     if (typeof VIDEO_MODELS === 'undefined') return null;
@@ -38,7 +38,7 @@
     const m = getModel();
     if (!m) return;
     m.name = 'Seedance 2.5';
-    m.resolutions = ['480p', '720p'];
+    m.resolutions = ['480p', '720p', '1080p'];
     m.durationRange = [4, 30];
     m.caps = {
       supportsFirstFrame: true,
@@ -100,7 +100,7 @@
           delete body.omni_reference_task_type;
         } else if (refMode) {
           if (taskMode === 'reference') {
-            delete body.omni_reference_task_type;
+            body.omni_reference_task_type = 'reference';
           } else if (taskMode === 'auto') {
             body.omni_reference_task_type = 'auto';
             body.ratio = 'adaptive';
@@ -144,10 +144,11 @@
           const isResolutionRejected = hasRef &&
             /resolution/i.test(err) &&
             /(not valid|invalid|不支持|不合法|不可用)/i.test(err);
+          const canFallbackResolution = params.resolution !== '1080p';
 
-          if (!firstResult?.success && isResolutionRejected && !params.__sd25ResolutionFallback) {
+          if (!firstResult?.success && isResolutionRejected && canFallbackResolution && !params.__sd25ResolutionFallback) {
             if (typeof showToast === 'function') {
-              showToast('当前 R2V 路由未接受所选分辨率，正在自动兼容重试', 'warning');
+              showToast('当前 R2V 路由未接受所选分辨率，正在按默认分辨率兼容重试', 'warning');
             }
             const retryParams = { ...params, __sd25ResolutionFallback: true };
             const retryResult = await originalSubmit(retryParams);
@@ -394,10 +395,12 @@
     const resolution = document.getElementById('vidResolution');
     if (!resolution) return;
 
+    const option1080 = Array.from(resolution.options).find(o => o.value === '1080p');
     const option720 = Array.from(resolution.options).find(o => o.value === '720p');
     const option480 = Array.from(resolution.options).find(o => o.value === '480p');
 
-    if (option720) option720.textContent = isR2V ? '720p（官方默认）' : '720p';
+    if (option1080) option1080.textContent = '1080p（10bit · HEVC）';
+    if (option720) option720.textContent = '720p（默认）';
     if (option480) option480.textContent = '480p';
 
     resolution.disabled = false;
@@ -418,29 +421,29 @@
 
     if (hasFrameInput) {
       if (ratio) ratio.value = 'adaptive';
-      if (hint) hint.textContent = '首帧 / 首尾帧：宽高比自动跟随首帧；时长可设 4–30 秒或 -1。';
+      if (hint) hint.textContent = '首帧 / 首尾帧：宽高比自动跟随首帧；时长可设 4–30 秒或 -1；输出支持 480p / 720p / 1080p。';
       return;
     }
 
     if (mode === 'reference') {
       if (hint) hint.textContent = isR2V
-        ? '参考生成：官方支持 480p / 720p，默认 720p。可直接选择分辨率；若当前 R2V 路由拒绝该参数，系统会自动去掉 resolution 并重试一次。'
+        ? '参考生成：显式使用 reference；输出支持 480p / 720p / 1080p，默认 720p；宽高比与时长可自定义。'
         : '参考生成：可自定义宽高比和 4–30 秒时长。';
     } else if (mode === 'auto') {
       if (ratio) ratio.value = 'adaptive';
       if (duration) duration.value = '-1';
       if (hint) hint.textContent = isR2V
-        ? '自动判断：按官方推荐使用 adaptive + -1；分辨率仍可选 480p / 720p，若当前路由拒绝则自动兼容重试。'
+        ? '自动判断：按官方推荐使用 adaptive + -1；输出可选 480p / 720p / 1080p。'
         : '自动判断：按官方推荐使用 adaptive + -1。';
     } else if (mode === 'edit') {
       if (ratio) ratio.value = 'adaptive';
       if (duration) duration.value = '-1';
       if (format) format.value = 'mov';
-      if (hint) hint.textContent = '视频编辑：需参考视频；宽高比 adaptive、时长 -1；分辨率按官方能力可选，若当前路由拒绝则自动兼容重试。';
+      if (hint) hint.textContent = '视频编辑：需参考视频；ratio 必须 adaptive、duration 必须 -1；MOV 推荐；输出可选 480p / 720p / 1080p。';
     } else if (mode === 'extend') {
       if (ratio) ratio.value = 'adaptive';
       if (format) format.value = 'mov';
-      if (hint) hint.textContent = '视频延长：需参考视频；宽高比 adaptive；分辨率按官方能力可选，若当前路由拒绝则自动兼容重试。';
+      if (hint) hint.textContent = '视频延长：需参考视频；ratio 必须 adaptive；duration 可设 4–30 秒或 -1；MOV 推荐；输出可选 480p / 720p / 1080p。';
     }
   }
 
@@ -463,10 +466,10 @@
     const audText = document.querySelector('#vidRefAudioUpload span');
 
     if (selected) {
-      if (imgHint) imgHint.textContent = '全模态参考最多 30 张；首/尾帧与参考素材为不同任务方式';
+      if (imgHint) imgHint.textContent = '全模态参考最多30张；首/尾帧与参考素材为互斥任务方式';
       if (imgText) imgText.textContent = '点击选择参考图片（最多30张）';
-      if (vidHint) vidHint.textContent = '公网 URL；最多10段，总时长不超过30秒';
-      if (audHint) audHint.textContent = '最多10段，总时长不超过30秒；支持纯音频参考';
+      if (vidHint) vidHint.textContent = '公网 URL；MP4/MOV；按 2.5 使用限制建议输入 480p/720p；最多10段，总时长≤30秒（编辑任务单段需4–30秒）';
+      if (audHint) audHint.textContent = 'WAV/MP3；最多10段，总时长≤30秒；支持纯音频参考';
       if (audText) audText.textContent = '点击选择参考音频（最多10段）';
     }
 
@@ -482,8 +485,6 @@
       if (dur) { dur.min = '-1'; dur.max = '30'; }
       syncTaskConstraints();
     }
-    const date = document.getElementById('versionDate');
-    if (date) date.textContent = '2026-08-17';
   }
 
   function installUiHooks() {
