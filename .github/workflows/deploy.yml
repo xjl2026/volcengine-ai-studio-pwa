@@ -45,7 +45,7 @@ jobs:
           # app.js: UI/navigation initialize synchronously; cloud/API startup runs in background.
           p = site / 'app.js'
           s = p.read_text(encoding='utf-8')
-          s = re.sub(r"const APP_VERSION = '[^']*';", "const APP_VERSION = '1.8.0';", s, count=1)
+          s = re.sub(r"const APP_VERSION = '[^']*';", "const APP_VERSION = '1.8.1';", s, count=1)
           for name in ['isSelectMode','selectedRecords','playlistVideos','playlistIndex','playlistVideoEl','playlistVideoEl2','playlistActiveEl','playlistPreloadedIdx']:
               s = re.sub(rf'^let {name} = .*?;\s*$', '', s, flags=re.M)
           state = """const videoGenState = { isGenerating: false };
@@ -106,7 +106,7 @@ jobs:
           p = site / 'index.html'
           s = p.read_text(encoding='utf-8')
           s = re.sub(r'<link rel="stylesheet" href="style\.css(?:\?[^\"]*)?">', f'<link rel="stylesheet" href="style.css?v={build_id}">', s, count=1)
-          s = re.sub(r'<span id="versionText">[^<]*</span>', '<span id="versionText">v1.8.0</span>', s, count=1)
+          s = re.sub(r'<span id="versionText">[^<]*</span>', '<span id="versionText">v1.8.1</span>', s, count=1)
           s = re.sub(r'<span id="versionDate">[^<]*</span>', f'<span id="versionDate">{build_time}</span>', s, count=1)
           scripts = f'''  <script src="api.js?v={build_id}"></script>\n  <script src="sync.js?v={build_id}"></script>\n  <script src="merge-cloud-history.js?v={build_id}"></script>\n  <script src="app.js?v={build_id}"></script>\n  <script src="seedance25.js?v={build_id}"></script>\n  <script src="seedance25-refvideo-hotfix.js?v={build_id}"></script>\n  <script src="video-task-manager.js?v={build_id}"></script>\n  <script src="pwa-update.js?v={build_id}"></script>\n'''
           start = s.find('  <script src="api.js')
