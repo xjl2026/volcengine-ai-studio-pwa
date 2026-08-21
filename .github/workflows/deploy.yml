@@ -32,7 +32,7 @@ jobs:
 
           rm -rf _site
           mkdir -p _site
-          cp index.html style.css api.js sync.js merge-cloud-history.js app.js seedance25.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js manifest.json _site/
+          cp index.html style.css api.js sync.js merge-cloud-history.js app.js seedance25.js seedance-audio-url.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js manifest.json _site/
 
           python3 - <<'PY'
           from pathlib import Path
@@ -46,7 +46,7 @@ jobs:
           # Build only stamps version/build metadata; do not rewrite runtime startup code.
           p = site / 'app.js'
           s = p.read_text(encoding='utf-8')
-          s, n = re.subn(r"const APP_VERSION = '[^']*';", "const APP_VERSION = '1.8.1';", s, count=1)
+          s, n = re.subn(r"const APP_VERSION = '[^']*';", "const APP_VERSION = '1.8.2';", s, count=1)
           if n != 1:
               raise RuntimeError('APP_VERSION anchor missing')
           s, n = re.subn(r"const APP_BUILD = '[^']*';", f"const APP_BUILD = '{build_time}';", s, count=1)
@@ -60,14 +60,14 @@ jobs:
           s, n = re.subn(r'<link rel="stylesheet" href="style\.css(?:\?[^\"]*)?">', f'<link rel="stylesheet" href="style.css?v={build_id}">', s, count=1)
           if n != 1:
               raise RuntimeError('style.css anchor missing')
-          s, n = re.subn(r'<span id="versionText">[^<]*</span>', '<span id="versionText">v1.8.1</span>', s, count=1)
+          s, n = re.subn(r'<span id="versionText">[^<]*</span>', '<span id="versionText">v1.8.2</span>', s, count=1)
           if n != 1:
               raise RuntimeError('versionText anchor missing')
           s, n = re.subn(r'<span id="versionDate">[^<]*</span>', f'<span id="versionDate">{build_time}</span>', s, count=1)
           if n != 1:
               raise RuntimeError('versionDate anchor missing')
 
-          scripts = f'''  <script src="api.js?v={build_id}"></script>\n  <script src="sync.js?v={build_id}"></script>\n  <script src="merge-cloud-history.js?v={build_id}"></script>\n  <script src="app.js?v={build_id}"></script>\n  <script src="seedance25.js?v={build_id}"></script>\n  <script src="seedance25-refvideo-hotfix.js?v={build_id}"></script>\n  <script src="video-task-manager.js?v={build_id}"></script>\n  <script src="pwa-update.js?v={build_id}"></script>\n'''
+          scripts = f'''  <script src="api.js?v={build_id}"></script>\n  <script src="sync.js?v={build_id}"></script>\n  <script src="merge-cloud-history.js?v={build_id}"></script>\n  <script src="app.js?v={build_id}"></script>\n  <script src="seedance25.js?v={build_id}"></script>\n  <script src="seedance-audio-url.js?v={build_id}"></script>\n  <script src="seedance25-refvideo-hotfix.js?v={build_id}"></script>\n  <script src="video-task-manager.js?v={build_id}"></script>\n  <script src="pwa-update.js?v={build_id}"></script>\n'''
           start = s.find('  <script src="api.js')
           end = s.find('</body>', start)
           if start < 0 or end < 0:
@@ -86,7 +86,7 @@ jobs:
 
       - name: Validate production runtime
         run: |
-          for f in api.js sync.js merge-cloud-history.js app.js seedance25.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js; do
+          for f in api.js sync.js merge-cloud-history.js app.js seedance25.js seedance-audio-url.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js; do
             node --check "_site/$f"
           done
           echo "Runtime scripts:"
