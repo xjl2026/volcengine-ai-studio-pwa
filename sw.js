@@ -9,6 +9,7 @@ const CACHE_FILES = [
   './sync.js?v=__BUILD_ID__',
   './merge-cloud-history.js?v=__BUILD_ID__',
   './app.js?v=__BUILD_ID__',
+  './image-ratio.js?v=__BUILD_ID__',
   './seedance25.js?v=__BUILD_ID__',
   './seedance25-refvideo-hotfix.js?v=__BUILD_ID__',
   './video-task-manager.js?v=__BUILD_ID__',
