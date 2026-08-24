@@ -141,9 +141,17 @@
       const ratioEl = document.getElementById('imgRatio');
       const ratio = ratioEl ? ratioEl.value : 'adaptive';
       const nextParams = Object.assign({}, params);
-      if (nextParams.size && ratio !== 'adaptive') {
-        nextParams.size = resolveSeedreamSize(nextParams.size, ratio);
-      }
+      const resolvedSize = nextParams.size && ratio !== 'adaptive'
+        ? resolveSeedreamSize(nextParams.size, ratio)
+        : nextParams.size;
+
+      window.__lastSeedreamImageRequest = {
+        ratio,
+        sizeTier: nextParams.size,
+        resolvedSize
+      };
+
+      if (resolvedSize) nextParams.size = resolvedSize;
       return original(nextParams);
     };
     window.__seedreamRatioRequestHook = true;
@@ -154,9 +162,13 @@
     const original = Store.addHistory.bind(Store);
     Store.addHistory = async function (record) {
       if (record && record.type === 'image') {
+        const snapshot = window.__lastSeedreamImageRequest || {};
         const ratioEl = document.getElementById('imgRatio');
-        const ratio = ratioEl ? ratioEl.value : 'adaptive';
-        record.params = Object.assign({}, record.params || {}, { ratio });
+        const ratio = snapshot.ratio || (ratioEl ? ratioEl.value : 'adaptive');
+        record.params = Object.assign({}, record.params || {}, {
+          ratio,
+          resolvedSize: snapshot.resolvedSize || (record.params && record.params.size)
+        });
       }
       return original(record);
     };
