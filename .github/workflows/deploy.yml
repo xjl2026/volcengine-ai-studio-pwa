@@ -32,7 +32,7 @@ jobs:
 
           rm -rf _site
           mkdir -p _site
-          cp index.html style.css api.js sync.js merge-cloud-history.js app.js seedance25.js seedance-audio-url.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js manifest.json _site/
+          cp index.html style.css api.js sync.js merge-cloud-history.js app.js image-ratio.js seedance25.js seedance-audio-url.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js manifest.json _site/
           cp -R director-demo _site/
 
           python3 - <<'PY'
@@ -68,7 +68,7 @@ jobs:
           if n != 1:
               raise RuntimeError('versionDate anchor missing')
 
-          scripts = f'''  <script src="api.js?v={build_id}"></script>\n  <script src="sync.js?v={build_id}"></script>\n  <script src="merge-cloud-history.js?v={build_id}"></script>\n  <script src="app.js?v={build_id}"></script>\n  <script src="seedance25.js?v={build_id}"></script>\n  <script src="seedance-audio-url.js?v={build_id}"></script>\n  <script src="seedance25-refvideo-hotfix.js?v={build_id}"></script>\n  <script src="video-task-manager.js?v={build_id}"></script>\n  <script src="pwa-update.js?v={build_id}"></script>\n'''
+          scripts = f'''  <script src="api.js?v={build_id}"></script>\n  <script src="sync.js?v={build_id}"></script>\n  <script src="merge-cloud-history.js?v={build_id}"></script>\n  <script src="app.js?v={build_id}"></script>\n  <script src="image-ratio.js?v={build_id}"></script>\n  <script src="seedance25.js?v={build_id}"></script>\n  <script src="seedance-audio-url.js?v={build_id}"></script>\n  <script src="seedance25-refvideo-hotfix.js?v={build_id}"></script>\n  <script src="video-task-manager.js?v={build_id}"></script>\n  <script src="pwa-update.js?v={build_id}"></script>\n'''
           start = s.find('  <script src="api.js')
           end = s.find('</body>', start)
           if start < 0 or end < 0:
@@ -87,7 +87,7 @@ jobs:
 
       - name: Validate production runtime
         run: |
-          for f in api.js sync.js merge-cloud-history.js app.js seedance25.js seedance-audio-url.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js; do
+          for f in api.js sync.js merge-cloud-history.js app.js image-ratio.js seedance25.js seedance-audio-url.js seedance25-refvideo-hotfix.js video-task-manager.js pwa-update.js sw.js; do
             node --check "_site/$f"
           done
           test -f _site/director-demo/index.html
